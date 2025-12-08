@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai"
 import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supabase"
 import { generateDashboardHtml, type AuditDashboardData } from "@/lib/dashboard-template"
 
@@ -264,12 +264,34 @@ export async function POST(request: NextRequest) {
     log("PDF processed", { base64Length: cleanBase64.length, estimatedSizeKB: pdfSizeKB })
 
     const genAI = new GoogleGenerativeAI(apiKey)
+
+    // Safety settings to prevent content blocking
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+    ]
+
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       generationConfig: {
         maxOutputTokens: 16000,
         temperature: 0.1,
       },
+      safetySettings,
     })
 
     log("=== GEMINI API REQUEST (Direct PDF Vision) ===")
@@ -295,7 +317,48 @@ export async function POST(request: NextRequest) {
           { text: prompt },
         ])
         const response = result.response
-        const text = response.text()
+
+        // Log response details for debugging
+        const candidates = response.candidates
+        log("Response candidates count", candidates?.length || 0)
+
+        if (candidates && candidates.length > 0) {
+          const candidate = candidates[0]
+          log("Candidate finish reason", candidate.finishReason)
+          log("Candidate safety ratings", candidate.safetyRatings)
+
+          // Check if blocked
+          if (candidate.finishReason === "SAFETY") {
+            log("ERROR: Response blocked by safety filters")
+            throw new Error("Response blocked by safety filters. The content may have triggered safety restrictions.")
+          }
+
+          if (candidate.finishReason === "RECITATION") {
+            log("ERROR: Response blocked due to recitation")
+            throw new Error("Response blocked due to recitation policy.")
+          }
+        }
+
+        // Get text - handle potential empty response
+        let text = ""
+        try {
+          text = response.text()
+        } catch (textError) {
+          log("ERROR: Failed to get response text", textError)
+          // Try to get text from candidates directly
+          if (candidates && candidates[0]?.content?.parts) {
+            text = candidates[0].content.parts
+              .filter((part: { text?: string }) => part.text)
+              .map((part: { text?: string }) => part.text)
+              .join("")
+          }
+        }
+
+        log("Response text length", text.length)
+        if (text.length === 0) {
+          log("WARNING: Empty response from Gemini")
+          log("Full response object", JSON.stringify(response, null, 2))
+        }
 
         // Get token counts from usage metadata
         const usageMetadata = response.usageMetadata

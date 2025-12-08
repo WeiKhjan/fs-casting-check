@@ -429,17 +429,33 @@ export async function POST(request: NextRequest) {
 
     log("=== STARTING TOOL USE LOOP ===")
 
+    // Helper function to call API with retry on rate limit
+    const callWithRetry = async (retryCount = 0): Promise<Anthropic.Message> => {
+      try {
+        return await anthropic.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 16000,
+          tools: CALCULATOR_TOOLS,
+          messages,
+        })
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        if (errorMessage.includes("rate_limit") && retryCount < 3) {
+          const waitTime = Math.pow(2, retryCount) * 30000 // 30s, 60s, 120s
+          log(`Rate limit hit, waiting ${waitTime / 1000}s before retry ${retryCount + 1}/3`)
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+          return callWithRetry(retryCount + 1)
+        }
+        throw error
+      }
+    }
+
     // Tool use loop
     while (iteration < maxIterations) {
       iteration++
       log(`--- Iteration ${iteration} ---`)
 
-      const message = await anthropic.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 16000,
-        tools: CALCULATOR_TOOLS,
-        messages,
-      })
+      const message = await callWithRetry()
 
       lastMessage = message
       totalInputTokens += message.usage.input_tokens

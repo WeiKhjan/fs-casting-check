@@ -85,10 +85,25 @@ export default function FinancialStatementChecker() {
         htmlLength: data.html?.length,
         debug: data.debug
       })
-      if (data.html) {
+
+      // Check if we have a valid HTML dashboard (not just empty or minimal HTML)
+      const hasValidDashboard = data.html &&
+        data.html.length > 500 &&
+        data.html.includes("kpi-grid")
+
+      if (hasValidDashboard) {
         setHtmlResult(data.html)
+      } else if (data.error) {
+        setError(data.error)
+        console.error("API Error:", data.error)
       } else {
-        setError("No HTML dashboard returned from API")
+        // Check if Gemini returned empty response (thinking tokens issue)
+        const debugInfo = data.debug || {}
+        if (debugInfo.discrepanciesFound === 0 && data.html?.length < 500) {
+          setError("AI returned empty analysis. This may be due to model processing limits. Please try again.")
+        } else {
+          setError("Failed to generate dashboard. The AI response could not be parsed.")
+        }
         console.error("Full response:", data)
       }
     } catch (err) {

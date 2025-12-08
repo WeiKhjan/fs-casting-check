@@ -12,9 +12,25 @@ const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to p
 7. Audit quality requirements Do not assume or invent numbers. Use only the numbers given. Maintain professional scepticism. If something is unclear, state the issue explicitly. Ensure your output can be used directly in audit documentation.
 
 IMPORTANT - Final output format (follow this order strictly):
-1. EXECUTIVE SUMMARY OF DISCREPANCIES - Start with a clear, prominent section listing ALL discrepancies found. Use a table or numbered list format. For each discrepancy include: location, nature of error, expected value, actual value, and variance amount. Flag critical errors with [CRITICAL], moderate issues with [MODERATE], and minor issues with [MINOR].
-2. CONCLUSION - State whether the financial statements cast correctly overall.
-3. DETAILED WORKINGS - Full workings in order: vertical casting, horizontal casting, cross referencing, internal consistency checks. Show all calculations and tie-outs.`
+
+1. EXECUTIVE SUMMARY OF DISCREPANCIES
+   - ONLY list items where there is an ACTUAL discrepancy (values do not match, calculations are incorrect, or figures do not reconcile)
+   - DO NOT include items that balance correctly or pass verification - those belong in the detailed workings section only
+   - If no discrepancies are found, clearly state "NO DISCREPANCIES FOUND" in this section
+   - For each REAL discrepancy include:
+     * Location (which statement, line item, note reference)
+     * Nature of error (what is wrong)
+     * Expected value (what it should be)
+     * Actual value (what is shown in the document)
+     * Variance amount (the difference)
+   - Severity tags (use ONLY for actual errors):
+     * [CRITICAL] - Material errors that significantly misstate the financial position (e.g., balance sheet doesn't balance, major calculation errors)
+     * [MODERATE] - Errors that affect accuracy but are not material (e.g., note doesn't tie to statement, rounding differences > threshold)
+     * [MINOR] - Small rounding differences or presentation issues
+
+2. CONCLUSION - State whether the financial statements cast correctly overall. Summarize the number and severity of discrepancies found.
+
+3. DETAILED WORKINGS - Full workings in order: vertical casting, horizontal casting, cross referencing, internal consistency checks. Show all calculations and tie-outs. Include verification of items that PASSED (balance correctly) in this section, not in the discrepancy summary.`
 
 export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`

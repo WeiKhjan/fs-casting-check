@@ -1,39 +1,99 @@
 import { type NextRequest, NextResponse } from "next/server"
 import Anthropic from "@anthropic-ai/sdk"
 import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supabase"
+import { generateDashboardHtml, type AuditDashboardData } from "@/lib/dashboard-template"
 
-const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to perform complete casting and cross checking of financial statements with full accuracy. Follow all instructions strictly.
+const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to perform complete casting and cross checking of financial statements with full accuracy.
 
-IMPORTANT: You have access to calculator tools. USE THEM for ALL arithmetic operations to ensure 100% accuracy. Do not perform mental math - always use the calculator tools provided.
+IMPORTANT: You have access to calculator tools. USE THEM for ALL arithmetic operations to ensure 100% accuracy. Do not perform mental math.
 
-1. Vertical casting Recompute every subtotal and total line by line. Add up all amounts independently using the calculator tools. Identify any differences, including small rounding errors. Clearly display all recalculations.
-2. Horizontal casting Compare current year and prior year numbers. Use calculator tools to compute variances. Highlight unusual or inconsistent movements. Confirm that year on year movements agree to the supporting notes. Flag any variances that do not reconcile.
-3. Cross referencing to the notes Check that every number in the notes agrees exactly to the primary financial statements. Tie each note item to its corresponding line in the statements. Identify any mismatch, reclassification, rounding difference or missing linkage.
-4. Internal consistency checks Confirm that the Balance Sheet balances using calculator tools. Confirm that opening balances in notes match the prior year closing balances. Check that reconciliations such as PPE, receivables, payables, equity and borrowings are mathematically correct. Ensure subtotals used in ratios or analysis agree to underlying line items.
-5. Workings Show all workings in full. Do not summarise. Present step by step calculations, comparison tables, variance tables and tie out tables. Make every number traceable to the source figure.
-6. Exception reporting Prepare a complete list of discrepancies. Categorise them into casting errors, note vs statement mismatches, prior year vs current year inconsistencies and missing or incomplete disclosures. For each discrepancy, explain the cause and provide the corrected figure when possible.
-7. Audit quality requirements Do not assume or invent numbers. Use only the numbers given. Maintain professional scepticism. If something is unclear, state the issue explicitly. Ensure your output can be used directly in audit documentation.
+Perform these checks:
+1. Vertical casting - Recompute every subtotal and total line by line using calculator tools
+2. Horizontal casting - Compare current year and prior year, compute variances using calculator tools
+3. Cross referencing - Check every number in notes agrees to primary statements
+4. Internal consistency - Confirm Balance Sheet balances, opening balances match prior year closing
 
-IMPORTANT - Final output format (follow this order strictly):
+CRITICAL: Your final response MUST be valid JSON only. No markdown, no explanation text outside the JSON.
 
-1. EXECUTIVE SUMMARY OF DISCREPANCIES
-   - ONLY list items where there is an ACTUAL discrepancy (values do not match, calculations are incorrect, or figures do not reconcile)
-   - DO NOT include items that balance correctly or pass verification - those belong in the detailed workings section only
-   - If no discrepancies are found, clearly state "NO DISCREPANCIES FOUND" in this section
-   - For each REAL discrepancy include:
-     * Location (which statement, line item, note reference)
-     * Nature of error (what is wrong)
-     * Expected value (what it should be)
-     * Actual value (what is shown in the document)
-     * Variance amount (the difference)
-   - Severity tags (use ONLY for actual errors):
-     * [CRITICAL] - Material errors that significantly misstate the financial position (e.g., balance sheet doesn't balance, major calculation errors)
-     * [MODERATE] - Errors that affect accuracy but are not material (e.g., note doesn't tie to statement, rounding differences > threshold)
-     * [MINOR] - Small rounding differences or presentation issues
+Output this exact JSON structure:
+{
+  "companyName": "COMPANY NAME FROM DOCUMENT",
+  "financialYearEnd": "DD Month YYYY",
+  "kpi": {
+    "testsPassed": number,
+    "testsFailed": number,
+    "totalTests": number,
+    "exceptionsFound": number,
+    "highSeverity": number,
+    "mediumSeverity": number,
+    "lowSeverity": number,
+    "passRate": number,
+    "horizontalChecks": "X/Y"
+  },
+  "conclusionSummary": "The financial statements cast correctly subject to X exceptions" or "The financial statements cast correctly with no exceptions",
+  "conclusionItems": [
+    {
+      "priority": "high" | "medium" | "low",
+      "note": "Note X or Location",
+      "description": "What needs to be corrected"
+    }
+  ],
+  "conclusionNote": "Balance Sheet balances. Summary statement about overall accuracy.",
+  "verticalCasting": [
+    {
+      "section": "SOFP 2024 or SOCI 2024 or Note X",
+      "description": "What is being checked",
+      "components": [
+        {"name": "Line item name", "value": "RM X,XXX,XXX"}
+      ],
+      "calculated": "RM X,XXX,XXX",
+      "stated": "RM X,XXX,XXX",
+      "variance": "RM 0 or RM X,XXX",
+      "varianceAmount": 0,
+      "status": "pass" | "fail"
+    }
+  ],
+  "horizontalCasting": [
+    {
+      "account": "Account or Balance name",
+      "opening": "RM X,XXX,XXX",
+      "additions": [
+        {"description": "+ Description", "value": "RM X,XXX,XXX"}
+      ],
+      "deductions": [
+        {"description": "- Description", "value": "RM X,XXX,XXX"}
+      ],
+      "calculatedClosing": "RM X,XXX,XXX",
+      "statedClosing": "RM X,XXX,XXX",
+      "variance": "RM 0 or RM X,XXX",
+      "varianceAmount": 0,
+      "status": "pass" | "fail"
+    }
+  ],
+  "exceptions": [
+    {
+      "id": 1,
+      "type": "Casting Error | Note vs Statement Mismatch | Conceptual Error | Presentation Error | Missing Disclosure | Requires Further Inquiry",
+      "location": "Note X or Statement location",
+      "description": "What is wrong",
+      "perStatement": "RM X,XXX,XXX or N/A",
+      "perCalculation": "RM X,XXX,XXX or N/A",
+      "difference": "RM X,XXX or N/A",
+      "severity": "high" | "medium" | "low",
+      "recommendation": "What should be done to fix it"
+    }
+  ]
+}
 
-2. CONCLUSION - State whether the financial statements cast correctly overall. Summarize the number and severity of discrepancies found.
-
-3. DETAILED WORKINGS - Full workings in order: vertical casting, horizontal casting, cross referencing, internal consistency checks. Show all calculations and tie-outs. Include verification of items that PASSED (balance correctly) in this section, not in the discrepancy summary.`
+Rules:
+- Include ALL vertical casting checks performed (minimum 15-25 checks for typical statements)
+- Include ALL horizontal casting checks (movement reconciliations for major accounts)
+- Only include actual discrepancies in exceptions array
+- If no exceptions, return empty array: "exceptions": []
+- Use actual numbers from the document, formatted with RM and commas
+- varianceAmount should be the numeric value (positive number)
+- Pass rate is percentage rounded to nearest integer
+- Format all monetary values consistently as "RM X,XXX,XXX"`
 
 // Define calculator tools
 const CALCULATOR_TOOLS: Anthropic.Tool[] = [
@@ -182,7 +242,7 @@ function executeCalculatorTool(toolName: string, input: Record<string, unknown>)
       const expected = input.expected as number
       const actual = input.actual as number
       const difference = actual - expected
-      const matches = Math.abs(difference) < 0.01 // Allow for small rounding differences
+      const matches = Math.abs(difference) < 0.01
       return JSON.stringify({
         expected,
         actual,
@@ -222,6 +282,51 @@ function executeCalculatorTool(toolName: string, input: Record<string, unknown>)
   }
 }
 
+// Parse JSON from Claude's response (handles potential markdown wrapping)
+function parseAuditJson(text: string): AuditDashboardData | null {
+  // Try to extract JSON from the response
+  let jsonStr = text.trim()
+
+  // Remove markdown code blocks if present
+  if (jsonStr.startsWith("```json")) {
+    jsonStr = jsonStr.slice(7)
+  } else if (jsonStr.startsWith("```")) {
+    jsonStr = jsonStr.slice(3)
+  }
+  if (jsonStr.endsWith("```")) {
+    jsonStr = jsonStr.slice(0, -3)
+  }
+  jsonStr = jsonStr.trim()
+
+  // Try to find JSON object in the text
+  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/)
+  if (jsonMatch) {
+    jsonStr = jsonMatch[0]
+  }
+
+  try {
+    const parsed = JSON.parse(jsonStr)
+
+    // Add report date
+    const now = new Date()
+    const reportDate = now.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+
+    return {
+      ...parsed,
+      reportDate,
+    } as AuditDashboardData
+  } catch (e) {
+    console.error("Failed to parse audit JSON:", e)
+    return null
+  }
+}
+
 export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   const startTime = Date.now()
@@ -240,11 +345,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { pdfBase64 } = body
+    const { pdfBase64, outputFormat = "html" } = body
     fileName = body.fileName || "unknown"
 
     log("=== REQUEST STARTED ===")
-    log("File received", { fileName, base64Length: pdfBase64?.length || 0 })
+    log("File received", { fileName, base64Length: pdfBase64?.length || 0, outputFormat })
 
     const apiKey = process.env.ANTHROPIC_API_KEY
 
@@ -309,14 +414,14 @@ export async function POST(request: NextRequest) {
           },
           {
             type: "text",
-            text: `${AUDIT_PROMPT}\n\nPlease analyze the financial statement document (${fileName}) and perform a comprehensive casting check following all the requirements above. USE THE CALCULATOR TOOLS for all arithmetic operations to ensure accuracy.`,
+            text: `${AUDIT_PROMPT}\n\nAnalyze the financial statement document (${fileName}) and perform a comprehensive casting check. USE THE CALCULATOR TOOLS for all arithmetic. Return ONLY the JSON structure specified above.`,
           },
         ],
       },
     ]
 
     let iteration = 0
-    const maxIterations = 50 // Safety limit
+    const maxIterations = 50
     let totalInputTokens = 0
     let totalOutputTokens = 0
     let finalAnalysis = ""
@@ -347,11 +452,8 @@ export async function POST(request: NextRequest) {
         outputTokens: message.usage.output_tokens,
       })
 
-      // Check if we're done (no more tool use)
       if (message.stop_reason === "end_turn") {
         log("=== TOOL USE LOOP COMPLETED ===", { totalIterations: iteration })
-
-        // Extract final text response
         const textBlocks = message.content.filter((block) => block.type === "text")
         finalAnalysis = textBlocks
           .map((block) => ("text" in block ? block.text : ""))
@@ -359,11 +461,9 @@ export async function POST(request: NextRequest) {
         break
       }
 
-      // Process tool use blocks
       const toolUseBlocks = message.content.filter((block) => block.type === "tool_use")
 
       if (toolUseBlocks.length === 0) {
-        // No tool use and not end_turn - extract text and break
         const textBlocks = message.content.filter((block) => block.type === "text")
         finalAnalysis = textBlocks
           .map((block) => ("text" in block ? block.text : ""))
@@ -371,7 +471,6 @@ export async function POST(request: NextRequest) {
         break
       }
 
-      // Build tool results
       const toolResults: Anthropic.ToolResultBlockParam[] = []
 
       for (const block of toolUseBlocks) {
@@ -396,7 +495,6 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Add assistant message and tool results to conversation
       messages.push({
         role: "assistant",
         content: message.content,
@@ -420,7 +518,6 @@ export async function POST(request: NextRequest) {
       totalTokens: totalInputTokens + totalOutputTokens,
     })
 
-    // Analyze tool usage
     const toolUsageSummary = toolCalls.reduce((acc, call) => {
       acc[call.tool] = (acc[call.tool] || 0) + 1
       return acc
@@ -428,32 +525,37 @@ export async function POST(request: NextRequest) {
 
     log("=== TOOL USAGE ANALYSIS ===")
     log("Tool calls by type", toolUsageSummary)
-    log("Tool calls made by Claude", {
-      toolCallCount: toolCalls.length,
-      hasToolCalls: toolCalls.length > 0,
-      message: toolCalls.length === 0
-        ? "No tools were called - Claude performed analysis using built-in reasoning only"
-        : `Claude called ${toolCalls.length} tool(s) across ${iteration} iteration(s)`,
-    })
-
-    log("=== RESPONSE SUMMARY ===")
-    log("Analysis length", { characters: finalAnalysis.length, words: finalAnalysis.split(/\s+/).length })
-    log("Total request duration", { durationMs: Date.now() - startTime, durationSec: ((Date.now() - startTime) / 1000).toFixed(2) })
 
     // Calculate costs
     const modelUsed = lastMessage?.model || "claude-sonnet-4-20250514"
     const costs = calculateCost(modelUsed, totalInputTokens, totalOutputTokens)
     log("Cost calculation", costs)
 
-    // Count discrepancies from analysis
-    const criticalCount = (finalAnalysis.match(/\[CRITICAL\]/g) || []).length
-    const moderateCount = (finalAnalysis.match(/\[MODERATE\]/g) || []).length
-    const minorCount = (finalAnalysis.match(/\[MINOR\]/g) || []).length
-    const totalDiscrepancies = criticalCount + moderateCount + minorCount
-
     // Calculate file size
     const fileSizeBytes = Math.round((cleanBase64.length * 3) / 4)
     const fileSizeMB = Math.round((fileSizeBytes / (1024 * 1024)) * 100) / 100
+
+    // Parse the JSON response and generate HTML dashboard
+    const auditData = parseAuditJson(finalAnalysis)
+    let htmlDashboard = ""
+    let discrepanciesFound = 0
+
+    if (auditData) {
+      htmlDashboard = generateDashboardHtml(auditData)
+      discrepanciesFound = auditData.kpi.exceptionsFound
+      log("Dashboard generated successfully", {
+        testsPassed: auditData.kpi.testsPassed,
+        testsFailed: auditData.kpi.testsFailed,
+        exceptionsFound: auditData.kpi.exceptionsFound,
+      })
+    } else {
+      log("WARNING: Could not parse audit JSON, returning raw analysis")
+      // Count discrepancies from raw text as fallback
+      const criticalCount = (finalAnalysis.match(/\[CRITICAL\]/gi) || []).length
+      const moderateCount = (finalAnalysis.match(/\[MODERATE\]/gi) || []).length
+      const minorCount = (finalAnalysis.match(/\[MINOR\]/gi) || []).length
+      discrepanciesFound = criticalCount + moderateCount + minorCount
+    }
 
     // Save job analytics to Supabase
     const jobAnalytics: JobAnalytics = {
@@ -477,7 +579,7 @@ export async function POST(request: NextRequest) {
       stop_reason: lastMessage?.stop_reason || "unknown",
       analysis_length_chars: finalAnalysis.length,
       analysis_length_words: finalAnalysis.split(/\s+/).length,
-      discrepancies_found: totalDiscrepancies,
+      discrepancies_found: discrepanciesFound,
       status: "success",
     }
 
@@ -485,8 +587,42 @@ export async function POST(request: NextRequest) {
     log("Supabase save result", saveResult)
     log("=== REQUEST COMPLETED ===")
 
+    // Return response based on output format
+    if (outputFormat === "json") {
+      return NextResponse.json({
+        data: auditData,
+        rawAnalysis: finalAnalysis,
+        model: modelUsed,
+        usage: {
+          input_tokens: totalInputTokens,
+          output_tokens: totalOutputTokens,
+        },
+        costs: {
+          input_cost_usd: costs.inputCost,
+          output_cost_usd: costs.outputCost,
+          total_cost_usd: costs.totalCost,
+        },
+        debug: {
+          requestId,
+          totalDurationMs: Date.now() - startTime,
+          apiDurationMs: apiDuration,
+          fileSizeBytes,
+          fileSizeMB,
+          toolsConfigured: true,
+          toolsAvailable: toolNames,
+          toolsCalled: toolCalls.length,
+          toolUsageSummary,
+          iterations: iteration,
+          stopReason: lastMessage?.stop_reason,
+          analyticsSaved: saveResult.success,
+        },
+      })
+    }
+
+    // Default: return HTML dashboard
     return NextResponse.json({
-      analysis: finalAnalysis,
+      html: htmlDashboard || `<html><body><h1>Analysis Complete</h1><pre>${finalAnalysis}</pre></body></html>`,
+      data: auditData,
       model: modelUsed,
       usage: {
         input_tokens: totalInputTokens,
@@ -508,16 +644,9 @@ export async function POST(request: NextRequest) {
         toolsCalled: toolCalls.length,
         toolUsageSummary,
         iterations: iteration,
-        toolCallDetails: toolCalls,
         stopReason: lastMessage?.stop_reason,
-        discrepancies: {
-          critical: criticalCount,
-          moderate: moderateCount,
-          minor: minorCount,
-          total: totalDiscrepancies,
-        },
+        discrepanciesFound,
         analyticsSaved: saveResult.success,
-        logs,
       },
     })
   } catch (error) {

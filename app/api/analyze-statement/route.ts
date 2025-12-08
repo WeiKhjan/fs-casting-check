@@ -288,7 +288,7 @@ export async function POST(request: NextRequest) {
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       generationConfig: {
-        maxOutputTokens: 200000, // High limit to accommodate thinking tokens + output
+        maxOutputTokens: 1000000, // 1M - no limit on output
         temperature: 0.1,
       },
       safetySettings,
@@ -296,7 +296,7 @@ export async function POST(request: NextRequest) {
 
     log("=== GEMINI API REQUEST (Direct PDF Vision) ===")
     log("Model", "gemini-2.5-flash")
-    log("Max tokens", 200000)
+    log("Max tokens", 1000000)
     log("PDF Size", `${pdfSizeKB} KB`)
 
     const apiStartTime = Date.now()

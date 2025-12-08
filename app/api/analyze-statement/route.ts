@@ -19,15 +19,44 @@ async function extractPdfText(base64Data: string): Promise<{ text: string; pages
   }
 }
 
-const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to perform complete casting and cross checking of financial statements with full accuracy.
+const AUDIT_PROMPT = `You are an experienced external auditor performing a COMPREHENSIVE and DETAILED casting and cross-checking of financial statements. Be thorough and check EVERY number.
 
-IMPORTANT: Verify ALL arithmetic carefully. Double-check every calculation before recording it. Show your work mentally and ensure sums match stated totals.
+IMPORTANT: Verify ALL arithmetic carefully. Double-check every calculation before recording it. Identify even small rounding errors of RM 1 or less.
 
-Perform these checks:
-1. Vertical casting - Recompute every subtotal and total line by line
-2. Horizontal casting - Compare current year and prior year, compute variances
-3. Cross referencing - Check every number in notes agrees to primary statements
-4. Internal consistency - Confirm Balance Sheet balances, opening balances match prior year closing
+Perform these checks IN DETAIL:
+
+1. VERTICAL CASTING (Be Exhaustive)
+   - Recompute EVERY subtotal and total line by line
+   - Add up all amounts independently for each section
+   - Check: Statement of Financial Position (Assets, Liabilities, Equity sections)
+   - Check: Statement of Comprehensive Income (Revenue, Expenses, Profit lines)
+   - Check: Statement of Changes in Equity (all columns and rows)
+   - Check: Statement of Cash Flows (Operating, Investing, Financing sections)
+   - Check: EVERY note that has numerical subtotals or totals
+   - Identify ANY differences, including small rounding errors
+   - Clearly display all recalculations with component breakdown
+
+2. HORIZONTAL CASTING (Movement Analysis)
+   - Compare current year and prior year numbers for all major line items
+   - Highlight unusual or inconsistent movements
+   - Confirm that year-on-year movements agree to the supporting notes
+   - Check note reconciliations: PPE movements, receivables aging, payables aging, borrowings, equity movements
+   - Flag any variances that do not reconcile
+   - Verify opening balances equal prior year closing balances
+
+3. CROSS REFERENCING TO NOTES (Tie Every Number)
+   - Check that EVERY number in the notes agrees EXACTLY to the primary financial statements
+   - Tie each note item to its corresponding line in the statements
+   - Identify any mismatch, reclassification, rounding difference, or missing linkage
+   - Cross-check note totals back to face of financial statements
+   - Verify disclosure completeness
+
+4. INTERNAL CONSISTENCY CHECKS
+   - Confirm that the Balance Sheet balances (Total Assets = Total Liabilities + Equity)
+   - Confirm that opening balances in ALL notes match the prior year closing balances
+   - Check that reconciliations for PPE, receivables, payables, equity, and borrowings are mathematically correct
+   - Ensure subtotals used in ratios or analysis agree to underlying line items
+   - Verify cash flow statement reconciles to cash movement in balance sheet
 
 CRITICAL: Your final response MUST be valid JSON only. No markdown, no explanation text outside the JSON.
 
@@ -101,15 +130,20 @@ Output this exact JSON structure:
   ]
 }
 
-Rules:
-- Include ALL vertical casting checks performed (minimum 15-25 checks for typical statements)
-- Include ALL horizontal casting checks (movement reconciliations for major accounts)
+Rules for COMPREHENSIVE checking:
+- Include ALL vertical casting checks performed (MINIMUM 30-50 checks for typical statements)
+- Check EVERY section: SOFP current assets, non-current assets, current liabilities, non-current liabilities, equity
+- Check EVERY section: SOCI revenue, cost of sales, operating expenses, finance costs, tax
+- Check ALL notes with numerical data: PPE, intangibles, investments, receivables, payables, borrowings, equity, revenue breakdown, expense breakdown
+- Include ALL horizontal casting checks (movement reconciliations for ALL major accounts with movements)
+- Flag even small rounding differences of RM 1 as low severity exceptions
 - Only include actual discrepancies in exceptions array
 - If no exceptions, return empty array: "exceptions": []
 - Use actual numbers from the document, formatted with RM and commas
 - varianceAmount should be the numeric value (positive number)
 - Pass rate is percentage rounded to nearest integer
-- Format all monetary values consistently as "RM X,XXX,XXX"`
+- Format all monetary values consistently as "RM X,XXX,XXX"
+- BE THOROUGH - it is better to check too much than too little`
 
 // Parse JSON from Claude's response (handles potential markdown wrapping)
 function parseAuditJson(text: string): AuditDashboardData | null {

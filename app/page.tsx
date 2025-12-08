@@ -197,7 +197,7 @@ export default function FinancialStatementChecker() {
             <span className="text-foreground">Casting Check</span>
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Upload your financial statements and let AI perform comprehensive casting and cross-checking with detailed audit reports
+            Upload your financial statements and let AI perform comprehensive casting and cross reference check
           </p>
         </div>
 
@@ -359,7 +359,7 @@ export default function FinancialStatementChecker() {
 
         {/* Footer */}
         <footer className="mt-12 text-center text-sm text-muted-foreground">
-          <p>FS Casting Check v2.0 | Powered by Claude AI | Built for Auditors</p>
+          <p>FS Casting Check v2.0 | Built for Auditors</p>
         </footer>
       </main>
     </div>

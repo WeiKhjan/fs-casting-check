@@ -344,6 +344,7 @@ export async function POST(request: NextRequest) {
 
     const saveResult = await saveJobAnalytics(jobAnalytics)
     log("Supabase save result", saveResult)
+    log("HTML dashboard length", { htmlLength: htmlDashboard.length })
     log("=== REQUEST COMPLETED ===")
 
     // Return response based on output format

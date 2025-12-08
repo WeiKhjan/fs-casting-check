@@ -61,8 +61,19 @@ export default function FinancialStatementChecker() {
       }
 
       const data = await response.json()
-      setHtmlResult(data.html)
+      console.log("API Response:", {
+        hasHtml: !!data.html,
+        htmlLength: data.html?.length,
+        debug: data.debug
+      })
+      if (data.html) {
+        setHtmlResult(data.html)
+      } else {
+        setError("No HTML dashboard returned from API")
+        console.error("Full response:", data)
+      }
     } catch (err) {
+      console.error("Fetch error:", err)
       setError(err instanceof Error ? err.message : "An error occurred during analysis")
     } finally {
       setIsAnalyzing(false)

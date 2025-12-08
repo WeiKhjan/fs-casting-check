@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import Anthropic from "@anthropic-ai/sdk"
+import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supabase"
 
 const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to perform complete casting and cross checking of financial statements with full accuracy. Follow all instructions strictly.
 
@@ -226,6 +227,8 @@ export async function POST(request: NextRequest) {
   const startTime = Date.now()
   const logs: string[] = []
   const toolCalls: Array<{ tool: string; input: unknown; output: string; iteration: number }> = []
+  let fileName = "unknown"
+  let cleanBase64 = ""
 
   const log = (message: string, data?: unknown) => {
     const timestamp = new Date().toISOString()
@@ -237,7 +240,8 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { pdfBase64, fileName } = body
+    const { pdfBase64 } = body
+    fileName = body.fileName || "unknown"
 
     log("=== REQUEST STARTED ===")
     log("File received", { fileName, base64Length: pdfBase64?.length || 0 })
@@ -261,7 +265,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "PDF file is required", logs }, { status: 400 })
     }
 
-    let cleanBase64 = ""
     if (typeof pdfBase64 === "string") {
       if (pdfBase64.includes(",")) {
         cleanBase64 = pdfBase64.split(",")[1]
@@ -436,19 +439,70 @@ export async function POST(request: NextRequest) {
     log("=== RESPONSE SUMMARY ===")
     log("Analysis length", { characters: finalAnalysis.length, words: finalAnalysis.split(/\s+/).length })
     log("Total request duration", { durationMs: Date.now() - startTime, durationSec: ((Date.now() - startTime) / 1000).toFixed(2) })
+
+    // Calculate costs
+    const modelUsed = lastMessage?.model || "claude-sonnet-4-20250514"
+    const costs = calculateCost(modelUsed, totalInputTokens, totalOutputTokens)
+    log("Cost calculation", costs)
+
+    // Count discrepancies from analysis
+    const criticalCount = (finalAnalysis.match(/\[CRITICAL\]/g) || []).length
+    const moderateCount = (finalAnalysis.match(/\[MODERATE\]/g) || []).length
+    const minorCount = (finalAnalysis.match(/\[MINOR\]/g) || []).length
+    const totalDiscrepancies = criticalCount + moderateCount + minorCount
+
+    // Calculate file size
+    const fileSizeBytes = Math.round((cleanBase64.length * 3) / 4)
+    const fileSizeMB = Math.round((fileSizeBytes / (1024 * 1024)) * 100) / 100
+
+    // Save job analytics to Supabase
+    const jobAnalytics: JobAnalytics = {
+      request_id: requestId,
+      file_name: fileName,
+      file_size_bytes: fileSizeBytes,
+      file_size_mb: fileSizeMB,
+      model: modelUsed,
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      total_tokens: totalInputTokens + totalOutputTokens,
+      input_cost_usd: costs.inputCost,
+      output_cost_usd: costs.outputCost,
+      total_cost_usd: costs.totalCost,
+      tools_configured: true,
+      tools_called: toolCalls.length,
+      tool_usage_summary: toolUsageSummary,
+      iterations: iteration,
+      api_duration_ms: apiDuration,
+      total_duration_ms: Date.now() - startTime,
+      stop_reason: lastMessage?.stop_reason || "unknown",
+      analysis_length_chars: finalAnalysis.length,
+      analysis_length_words: finalAnalysis.split(/\s+/).length,
+      discrepancies_found: totalDiscrepancies,
+      status: "success",
+    }
+
+    const saveResult = await saveJobAnalytics(jobAnalytics)
+    log("Supabase save result", saveResult)
     log("=== REQUEST COMPLETED ===")
 
     return NextResponse.json({
       analysis: finalAnalysis,
-      model: lastMessage?.model || "claude-sonnet-4-20250514",
+      model: modelUsed,
       usage: {
         input_tokens: totalInputTokens,
         output_tokens: totalOutputTokens,
+      },
+      costs: {
+        input_cost_usd: costs.inputCost,
+        output_cost_usd: costs.outputCost,
+        total_cost_usd: costs.totalCost,
       },
       debug: {
         requestId,
         totalDurationMs: Date.now() - startTime,
         apiDurationMs: apiDuration,
+        fileSizeBytes,
+        fileSizeMB,
         toolsConfigured: true,
         toolsAvailable: toolNames,
         toolsCalled: toolCalls.length,
@@ -456,16 +510,57 @@ export async function POST(request: NextRequest) {
         iterations: iteration,
         toolCallDetails: toolCalls,
         stopReason: lastMessage?.stop_reason,
+        discrepancies: {
+          critical: criticalCount,
+          moderate: moderateCount,
+          minor: minorCount,
+          total: totalDiscrepancies,
+        },
+        analyticsSaved: saveResult.success,
         logs,
       },
     })
   } catch (error) {
     log("=== ERROR ===")
+    const errorMessage = error instanceof Error ? error.message : String(error)
     log("Error occurred", {
       name: error instanceof Error ? error.name : "Unknown",
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage,
       stack: error instanceof Error ? error.stack : undefined,
     })
+
+    // Try to save error job to Supabase
+    try {
+      const fileSizeBytes = cleanBase64 ? Math.round((cleanBase64.length * 3) / 4) : 0
+      const fileSizeMB = Math.round((fileSizeBytes / (1024 * 1024)) * 100) / 100
+      const errorJobAnalytics: JobAnalytics = {
+        request_id: requestId,
+        file_name: fileName,
+        file_size_bytes: fileSizeBytes,
+        file_size_mb: fileSizeMB,
+        model: "claude-sonnet-4-20250514",
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        input_cost_usd: 0,
+        output_cost_usd: 0,
+        total_cost_usd: 0,
+        tools_configured: true,
+        tools_called: toolCalls.length,
+        tool_usage_summary: {},
+        iterations: 0,
+        api_duration_ms: 0,
+        total_duration_ms: Date.now() - startTime,
+        stop_reason: "error",
+        analysis_length_chars: 0,
+        analysis_length_words: 0,
+        status: "error",
+        error_message: errorMessage,
+      }
+      await saveJobAnalytics(errorJobAnalytics)
+    } catch (saveError) {
+      log("Failed to save error analytics", saveError)
+    }
 
     if (error instanceof Error) {
       return NextResponse.json({

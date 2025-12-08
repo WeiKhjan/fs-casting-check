@@ -9,9 +9,8 @@
     "start": "next start"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "latest",
+    "@google/generative-ai": "^0.21.0",
     "@supabase/supabase-js": "^2.47.0",
-    "pdf-parse": "^1.1.1",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",

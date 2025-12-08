@@ -1,48 +1,18 @@
 import { type NextRequest, NextResponse } from "next/server"
-import Anthropic from "@anthropic-ai/sdk"
+import { GoogleGenerativeAI } from "@google/generative-ai"
 import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supabase"
 import { generateDashboardHtml, type AuditDashboardData } from "@/lib/dashboard-template"
-import pdf from "pdf-parse"
-
-// Extract text from PDF to reduce token usage (90k -> ~15-25k tokens)
-async function extractPdfText(base64Data: string): Promise<{ text: string; pages: number }> {
-  try {
-    const buffer = Buffer.from(base64Data, "base64")
-    const data = await pdf(buffer)
-    return {
-      text: data.text,
-      pages: data.numpages,
-    }
-  } catch (error) {
-    console.error("PDF text extraction failed:", error)
-    throw new Error("Failed to extract text from PDF. Please ensure the PDF is not encrypted or corrupted.")
-  }
-}
 
 const AUDIT_PROMPT = `You are an experienced external auditor performing a COMPREHENSIVE and DETAILED casting and cross-checking of financial statements. Be thorough and check EVERY number.
 
-CRITICAL PDF PARSING NOTE:
-When reading the extracted text, note reference numbers may be concatenated with amounts OR amounts may lose leading digits due to PDF column extraction issues.
-
-COMMON PARSING ERRORS TO WATCH FOR:
-1. Note number concatenated WITH amount: "960,245" might be Note "9" + Amount "60,245"
-2. Amount losing leading digit TO note column: "13,076,723" might appear as "1" (note) + "3,076,723" (amount) - WRONG! The actual amount is 13,076,723
-3. Note on different line bleeding into amount: If "Other payables" has Note 13, but "Trade payables" above shows "13,076,723", the "13" is NOT a note - it's part of the 13 million amount
-
-HOW TO VERIFY CORRECT AMOUNTS:
-- Cross-reference EVERY amount with the corresponding note disclosure
-- Check if amounts make sense in context (e.g., Trade payables of 3 million vs 13 million - which fits the business size?)
-- Look at prior year comparatives - amounts should be in similar magnitude
-- Verify subtotals: if Current Liabilities subtotal is 22,228,814, work backwards to verify individual line items
-- Note references are typically 1-2 digit numbers (1-50) and usually appear consistently formatted
-- If a line item has NO note reference in the original document, don't assume a leading digit is a note
-
-ALWAYS verify by checking:
-1. The note details for that line item
-2. The subtotals (individual items must add up to stated subtotal)
-3. Prior year amounts for reasonableness
+You are viewing the PDF document directly. Carefully examine all tables, numbers, and formatting as they appear in the original document.
 
 IMPORTANT: Verify ALL arithmetic carefully. Double-check every calculation before recording it. Identify even small rounding errors of RM 1 or less.
+
+ALWAYS verify by checking:
+1. The note details for each line item
+2. The subtotals (individual items must add up to stated subtotal)
+3. Prior year amounts for reasonableness
 
 Perform these checks IN DETAIL:
 
@@ -180,9 +150,18 @@ Rules for COMPREHENSIVE checking:
 - varianceAmount should be the numeric value (positive number)
 - Pass rate is percentage rounded to nearest integer
 - Format all monetary values consistently as "RM X,XXX,XXX"
-- BE THOROUGH - it is better to check too much than too little`
+- BE THOROUGH - it is better to check too much than too little
 
-// Parse JSON from Claude's response (handles potential markdown wrapping)
+CRITICAL DATA CONSISTENCY RULES:
+- The conclusionItems MUST match the exceptions array - every item in conclusionItems must have a corresponding entry in exceptions with the SAME variance amount
+- If you report a variance in conclusionItems (e.g., "difference of RM 20,000"), the corresponding entry in verticalCasting, horizontalCasting, crossReferenceChecks, or exceptions MUST show that SAME variance amount (RM 20,000), NOT RM 0
+- status="fail" means there IS a variance - the variance field MUST show the actual difference, never RM 0
+- status="pass" means variance is zero - the variance field should be "RM 0"
+- NEVER mark an item as "fail" with variance "RM 0" - this is contradictory
+- NEVER mark an item as "pass" with a non-zero variance - this is contradictory
+- Double-check that ALL numbers in the detailed findings match what you describe in the conclusion`
+
+// Parse JSON from Gemini's response (handles potential markdown wrapping)
 function parseAuditJson(text: string): AuditDashboardData | null {
   // Try to extract JSON from the response
   let jsonStr = text.trim()
@@ -250,14 +229,14 @@ export async function POST(request: NextRequest) {
     log("=== REQUEST STARTED ===")
     log("File received", { fileName, base64Length: pdfBase64?.length || 0, outputFormat })
 
-    const apiKey = process.env.ANTHROPIC_API_KEY
+    const apiKey = process.env.GOOGLE_API_KEY
 
     if (!apiKey) {
       log("ERROR: Missing API key")
       return NextResponse.json(
         {
           error:
-            "ANTHROPIC_API_KEY environment variable is not configured. Please add it in the Vercel project settings.",
+            "GOOGLE_API_KEY environment variable is not configured. Please add it in the Vercel project settings.",
           logs,
         },
         { status: 500 },
@@ -284,46 +263,49 @@ export async function POST(request: NextRequest) {
     const pdfSizeKB = Math.round((cleanBase64.length * 3) / 4 / 1024)
     log("PDF processed", { base64Length: cleanBase64.length, estimatedSizeKB: pdfSizeKB })
 
-    // Extract text from PDF to reduce token usage (90k -> ~15-25k tokens)
-    log("=== EXTRACTING PDF TEXT ===")
-    const { text: pdfText, pages: pdfPages } = await extractPdfText(cleanBase64)
-    const textLength = pdfText.length
-    const estimatedTokens = Math.round(textLength / 4) // Rough estimate: 4 chars per token
-    log("PDF text extracted", {
-      pages: pdfPages,
-      textLength,
-      estimatedTokens,
-      tokenReduction: `~${Math.round((1 - estimatedTokens / 90000) * 100)}% reduction from raw PDF`,
+    const genAI = new GoogleGenerativeAI(apiKey)
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash-preview-05-20",
+      generationConfig: {
+        maxOutputTokens: 16000,
+        temperature: 0.1,
+      },
     })
 
-    const anthropic = new Anthropic({
-      apiKey: apiKey,
-      dangerouslyAllowBrowser: true,
-    })
-
-    log("=== CLAUDE API REQUEST ===")
-    log("Model", "claude-sonnet-4-20250514")
+    log("=== GEMINI API REQUEST (Direct PDF Vision) ===")
+    log("Model", "gemini-2.5-flash-preview-05-20")
     log("Max tokens", 16000)
-    log("System prompt length", AUDIT_PROMPT.length)
+    log("PDF Size", `${pdfSizeKB} KB`)
 
     const apiStartTime = Date.now()
 
     // Helper function to call API with retry on rate limit
-    const callWithRetry = async (retryCount = 0): Promise<Anthropic.Message> => {
+    const callWithRetry = async (retryCount = 0): Promise<{ text: string; inputTokens: number; outputTokens: number }> => {
       try {
-        return await anthropic.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 16000,
-          messages: [
-            {
-              role: "user",
-              content: `${AUDIT_PROMPT}\n\n=== FINANCIAL STATEMENT DOCUMENT: ${fileName} (${pdfPages} pages) ===\n\n${pdfText}\n\n=== END OF DOCUMENT ===\n\nAnalyze the financial statement above and perform a comprehensive casting check. Return ONLY the JSON structure specified above.`,
+        const prompt = `${AUDIT_PROMPT}\n\nAnalyze the financial statement document above and perform a comprehensive casting check. Return ONLY the JSON structure specified above.`
+
+        // Send PDF directly to Gemini Vision
+        const result = await model.generateContent([
+          {
+            inlineData: {
+              mimeType: "application/pdf",
+              data: cleanBase64,
             },
-          ],
-        })
+          },
+          { text: prompt },
+        ])
+        const response = result.response
+        const text = response.text()
+
+        // Get token counts from usage metadata
+        const usageMetadata = response.usageMetadata
+        const inputTokens = usageMetadata?.promptTokenCount || 0
+        const outputTokens = usageMetadata?.candidatesTokenCount || 0
+
+        return { text, inputTokens, outputTokens }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
-        if (errorMessage.includes("rate_limit") && retryCount < 3) {
+        if ((errorMessage.includes("429") || errorMessage.includes("rate") || errorMessage.includes("quota")) && retryCount < 3) {
           const waitTime = Math.pow(2, retryCount) * 30000 // 30s, 60s, 120s
           log(`Rate limit hit, waiting ${waitTime / 1000}s before retry ${retryCount + 1}/3`)
           await new Promise(resolve => setTimeout(resolve, waitTime))
@@ -333,30 +315,22 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    log("=== CALLING CLAUDE API (single request) ===")
-    const message = await callWithRetry()
+    log("=== CALLING GEMINI API (Direct PDF Vision) ===")
+    const { text: finalAnalysis, inputTokens: totalInputTokens, outputTokens: totalOutputTokens } = await callWithRetry()
 
     const apiDuration = Date.now() - apiStartTime
-    const totalInputTokens = message.usage.input_tokens
-    const totalOutputTokens = message.usage.output_tokens
 
-    // Extract text response
-    const textBlocks = message.content.filter((block) => block.type === "text")
-    const finalAnalysis = textBlocks
-      .map((block) => ("text" in block ? block.text : ""))
-      .join("\n\n")
-
-    log("=== CLAUDE API RESPONSE SUMMARY ===")
+    log("=== GEMINI API RESPONSE SUMMARY ===")
     log("API call duration", { durationMs: apiDuration, durationSec: (apiDuration / 1000).toFixed(2) })
     log("Token usage", {
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
       totalTokens: totalInputTokens + totalOutputTokens,
     })
-    log("Stop reason", message.stop_reason)
+    log("Stop reason", "completed")
 
     // Calculate costs
-    const modelUsed = message.model || "claude-sonnet-4-20250514"
+    const modelUsed = "gemini-2.5-flash-preview-05-20"
     const costs = calculateCost(modelUsed, totalInputTokens, totalOutputTokens)
     log("Cost calculation", costs)
 
@@ -392,7 +366,7 @@ export async function POST(request: NextRequest) {
       file_name: fileName,
       file_size_bytes: fileSizeBytes,
       file_size_mb: fileSizeMB,
-      pdf_pages: pdfPages,
+      pdf_pages: undefined, // Page count not available with direct PDF vision
       model: modelUsed,
       input_tokens: totalInputTokens,
       output_tokens: totalOutputTokens,
@@ -406,7 +380,7 @@ export async function POST(request: NextRequest) {
       iterations: 1,
       api_duration_ms: apiDuration,
       total_duration_ms: Date.now() - startTime,
-      stop_reason: message.stop_reason || "unknown",
+      stop_reason: "completed",
       analysis_length_chars: finalAnalysis.length,
       analysis_length_words: finalAnalysis.split(/\s+/).length,
       discrepancies_found: discrepanciesFound,
@@ -439,7 +413,7 @@ export async function POST(request: NextRequest) {
           apiDurationMs: apiDuration,
           fileSizeBytes,
           fileSizeMB,
-          stopReason: message.stop_reason,
+          stopReason: "completed",
           analyticsSaved: saveResult.success,
         },
       })
@@ -465,7 +439,7 @@ export async function POST(request: NextRequest) {
         apiDurationMs: apiDuration,
         fileSizeBytes,
         fileSizeMB,
-        stopReason: message.stop_reason,
+        stopReason: "completed",
         discrepanciesFound,
         analyticsSaved: saveResult.success,
       },
@@ -488,7 +462,7 @@ export async function POST(request: NextRequest) {
         file_name: fileName,
         file_size_bytes: fileSizeBytes,
         file_size_mb: fileSizeMB,
-        model: "claude-sonnet-4-20250514",
+        model: "gemini-2.5-flash-preview-05-20",
         input_tokens: 0,
         output_tokens: 0,
         total_tokens: 0,

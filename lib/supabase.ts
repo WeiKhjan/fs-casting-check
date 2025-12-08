@@ -51,16 +51,16 @@ export interface JobAnalytics {
   created_at?: string
 }
 
-// Pricing for Claude Sonnet 4 (per 1M tokens)
+// Pricing for Gemini 2.5 Flash (per 1M tokens) - Paid Tier
 const PRICING = {
-  "claude-sonnet-4-20250514": {
-    input: 3.0,   // $3 per 1M input tokens
-    output: 15.0, // $15 per 1M output tokens
+  "gemini-2.5-flash-preview-05-20": {
+    input: 0.30,   // $0.30 per 1M input tokens (text/image/video)
+    output: 2.50,  // $2.50 per 1M output tokens (including thinking tokens)
   },
   // Add other models as needed
   default: {
-    input: 3.0,
-    output: 15.0,
+    input: 0.30,
+    output: 2.50,
   },
 }
 

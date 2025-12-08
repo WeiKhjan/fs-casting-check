@@ -71,7 +71,7 @@ Output this exact JSON structure:
     {
       "priority": "high" | "medium" | "low",
       "note": "Note X or Location",
-      "description": "What needs to be corrected"
+      "description": "Concise description using symbols: Stated RM X vs Calculated RM Y → Diff RM Z"
     }
   ],
   "conclusionNote": "Balance Sheet balances. Summary statement about overall accuracy.",
@@ -151,6 +151,15 @@ Rules for COMPREHENSIVE checking:
 - Pass rate is percentage rounded to nearest integer
 - Format all monetary values consistently as "RM X,XXX,XXX"
 - BE THOROUGH - it is better to check too much than too little
+
+CONCLUSION FORMAT RULES (be concise, use symbols):
+- Use symbols: → (leads to), = (equals), vs (versus), ≠ (not equal), Δ (difference)
+- Format: "Stated RM X vs Calculated RM Y → Δ RM Z" or "Note total RM X ≠ SOFP RM Y → Δ RM Z"
+- Keep descriptions SHORT - max 80 characters
+- Examples:
+  * "Stated RM 2,620,854 vs Sum RM 2,620,853 → Δ RM 1"
+  * "Note 15 Staff Cost RM 2,120,263 ≠ Schedule B RM 2,079,503 → Δ RM 40,760"
+  * "Components sum RM 11,344,437 = Stated RM 11,344,437 ✓"
 
 CRITICAL DATA CONSISTENCY RULES:
 - The conclusionItems MUST match the exceptions array - every item in conclusionItems must have a corresponding entry in exceptions with the SAME variance amount

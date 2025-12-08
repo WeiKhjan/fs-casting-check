@@ -22,6 +22,7 @@ import {
   FileCheck
 } from "lucide-react"
 import { useTheme } from "next-themes"
+import { LoadingPopup } from "@/components/ui/loading-popup"
 
 export default function FinancialStatementChecker() {
   const [file, setFile] = useState<File | null>(null)
@@ -156,6 +157,9 @@ export default function FinancialStatementChecker() {
 
   return (
     <div className="min-h-screen bg-background transition-colors duration-300">
+      {/* Loading Popup */}
+      <LoadingPopup isOpen={isAnalyzing} message="Analyzing Financial Statement..." />
+
       {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

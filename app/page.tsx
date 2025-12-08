@@ -224,7 +224,7 @@ export default function FinancialStatementChecker() {
                 <label
                   htmlFor="pdf-upload"
                   className={`
-                    relative flex flex-col items-center justify-center w-full h-48
+                    relative flex flex-col items-center justify-center w-full min-h-48 py-6
                     border-2 border-dashed rounded-xl cursor-pointer
                     transition-all duration-300
                     ${file
@@ -234,12 +234,12 @@ export default function FinancialStatementChecker() {
                     ${isAnalyzing ? 'pointer-events-none opacity-50' : ''}
                   `}
                 >
-                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <div className="flex flex-col items-center justify-center px-4 w-full">
                     {file ? (
                       <>
                         <CheckCircle2 className="w-12 h-12 text-green-500 mb-3" />
                         <p className="text-sm font-medium text-green-500">File Selected</p>
-                        <p className="text-xs text-muted-foreground mt-1 px-4 text-center truncate max-w-full">
+                        <p className="text-xs text-muted-foreground mt-1 px-4 text-center break-all max-w-full">
                           {file.name}
                         </p>
                         <p className="text-xs text-muted-foreground mt-1">

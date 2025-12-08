@@ -552,6 +552,33 @@ export function generateDashboardHtml(data: AuditDashboardData): string {
 
         <section class="section">
             <div class="section-header">
+                <h2><span class="icon icon-red">⚠️</span>Exception Report</h2>
+                <span class="section-badge ${exceptionBadgeClass}">${data.kpi.exceptionsFound} Issues Found</span>
+            </div>
+            <div class="section-body">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Type</th>
+                            <th>Location</th>
+                            <th>Description</th>
+                            <th>Per Statement</th>
+                            <th>Per Calculation</th>
+                            <th>Difference</th>
+                            <th>Severity</th>
+                            <th>Recommendation</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${exceptionRows}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
                 <h2><span class="icon icon-blue">🔢</span>Vertical Casting Results</h2>
                 <span class="section-badge ${verticalBadgeClass}">${data.kpi.testsPassed}/${data.kpi.totalTests} Passed</span>
             </div>
@@ -621,33 +648,6 @@ export function generateDashboardHtml(data: AuditDashboardData): string {
                     </thead>
                     <tbody>
                         ${crossReferenceRows}
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <section class="section">
-            <div class="section-header">
-                <h2><span class="icon icon-red">⚠️</span>Exception Report</h2>
-                <span class="section-badge ${exceptionBadgeClass}">${data.kpi.exceptionsFound} Issues Found</span>
-            </div>
-            <div class="section-body">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Type</th>
-                            <th>Location</th>
-                            <th>Description</th>
-                            <th>Per Statement</th>
-                            <th>Per Calculation</th>
-                            <th>Difference</th>
-                            <th>Severity</th>
-                            <th>Recommendation</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${exceptionRows}
                     </tbody>
                 </table>
             </div>

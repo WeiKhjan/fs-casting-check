@@ -40,6 +40,17 @@ export interface HorizontalCastingResult {
   status: "pass" | "fail"
 }
 
+export interface CrossReferenceCheck {
+  noteRef: string
+  noteDescription: string
+  lineItem: string
+  perNote: string
+  perStatement: string
+  variance: string
+  varianceAmount: number
+  status: "pass" | "fail"
+}
+
 export interface ExceptionItem {
   id: number
   type: string
@@ -62,6 +73,7 @@ export interface AuditDashboardData {
   conclusionNote: string
   verticalCasting: VerticalCastingResult[]
   horizontalCasting: HorizontalCastingResult[]
+  crossReferenceChecks?: CrossReferenceCheck[]
   exceptions: ExceptionItem[]
 }
 
@@ -120,13 +132,28 @@ export function generateDashboardHtml(data: AuditDashboardData): string {
             <td class="recommendation">${escapeHtml(ex.recommendation)}</td>
         </tr>`).join("\n")
 
+  const crossReferenceRows = (data.crossReferenceChecks || []).map(row => `
+        <tr class="${row.status === 'fail' ? 'row-error' : ''}">
+            <td>${escapeHtml(row.noteRef)}</td>
+            <td>${escapeHtml(row.noteDescription)}</td>
+            <td>${escapeHtml(row.lineItem)}</td>
+            <td class="number">${escapeHtml(row.perNote)}</td>
+            <td class="number">${escapeHtml(row.perStatement)}</td>
+            <td class="number ${row.varianceAmount !== 0 ? 'variance-error' : ''}">${escapeHtml(row.variance)}</td>
+            <td class="${row.status === 'pass' ? 'status-pass' : 'status-fail'}">${row.status === 'pass' ? '✓ PASS' : '✗ FAIL'}</td>
+        </tr>`).join("\n")
+
   const conclusionItemsHtml = data.conclusionItems.map(item =>
     `<li><strong>${escapeHtml(item.note)} (${item.priority.charAt(0).toUpperCase() + item.priority.slice(1)} Priority):</strong> ${escapeHtml(item.description)}</li>`
   ).join("\n")
 
+  const crossRefPassed = (data.crossReferenceChecks || []).filter(c => c.status === 'pass').length
+  const crossRefTotal = (data.crossReferenceChecks || []).length
+  const crossRefBadgeClass = crossRefPassed === crossRefTotal ? 'badge-success' : 'badge-warning'
+
   const verticalBadgeClass = data.kpi.testsFailed === 0 ? 'badge-success' : 'badge-warning'
   const horizontalBadgeClass = 'badge-success'
-  const exceptionBadgeClass = data.exceptionsFound === 0 ? 'badge-success' : 'badge-danger'
+  const exceptionBadgeClass = data.kpi.exceptionsFound === 0 ? 'badge-success' : 'badge-danger'
 
   return `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -569,6 +596,31 @@ export function generateDashboardHtml(data: AuditDashboardData): string {
                     </thead>
                     <tbody>
                         ${horizontalCastingRows}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <h2><span class="icon icon-yellow">🔗</span>Cross Reference Checks (Notes to Statements)</h2>
+                <span class="section-badge ${crossRefBadgeClass}">${crossRefPassed}/${crossRefTotal} Matched</span>
+            </div>
+            <div class="section-body">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Note Ref</th>
+                            <th>Note Description</th>
+                            <th>Statement Line Item</th>
+                            <th>Per Note</th>
+                            <th>Per Statement</th>
+                            <th>Variance</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${crossReferenceRows}
                     </tbody>
                 </table>
             </div>

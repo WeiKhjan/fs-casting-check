@@ -136,6 +136,18 @@ Output this exact JSON structure:
       "status": "pass" | "fail"
     }
   ],
+  "crossReferenceChecks": [
+    {
+      "noteRef": "Note 8",
+      "noteDescription": "Other Receivables",
+      "lineItem": "Other receivables (SOFP)",
+      "perNote": "RM X,XXX,XXX",
+      "perStatement": "RM X,XXX,XXX",
+      "variance": "RM 0 or RM X",
+      "varianceAmount": 0,
+      "status": "pass" | "fail"
+    }
+  ],
   "exceptions": [
     {
       "id": 1,
@@ -157,7 +169,11 @@ Rules for COMPREHENSIVE checking:
 - Check EVERY section: SOCI revenue, cost of sales, operating expenses, finance costs, tax
 - Check ALL notes with numerical data: PPE, intangibles, investments, receivables, payables, borrowings, equity, revenue breakdown, expense breakdown
 - Include ALL horizontal casting checks (movement reconciliations for ALL major accounts with movements)
-- Flag even small rounding differences of RM 1 as low severity exceptions
+- Include ALL cross-reference checks (MINIMUM 15-25 note-to-statement ties):
+  * Every note total MUST be checked against its corresponding SOFP/SOCI line item
+  * Check: PPE note total vs SOFP PPE, Inventories note vs SOFP Inventories, Trade receivables note vs SOFP, Other receivables note vs SOFP, Trade payables note vs SOFP, Other payables note vs SOFP, Borrowings note vs SOFP, Revenue note vs SOCI, etc.
+  * Flag ANY difference, even RM 1 difference, as this indicates a potential error
+- Flag even small rounding differences of RM 1 as low severity exceptions - these MUST be reported
 - Only include actual discrepancies in exceptions array
 - If no exceptions, return empty array: "exceptions": []
 - Use actual numbers from the document, formatted with RM and commas

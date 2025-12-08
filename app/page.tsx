@@ -140,12 +140,12 @@ export default function FinancialStatementChecker() {
     {
       icon: Zap,
       title: "Horizontal Casting",
-      description: "Compare current year and prior year numbers"
+      description: "Recompute every subtotal and line by line"
     },
     {
       icon: FileCheck,
       title: "Cross Referencing",
-      description: "Verify notes agree with primary statements"
+      description: "Verify notes to accounts with financial statements"
     },
     {
       icon: Shield,

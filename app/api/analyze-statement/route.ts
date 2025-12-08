@@ -22,14 +22,25 @@ async function extractPdfText(base64Data: string): Promise<{ text: string; pages
 const AUDIT_PROMPT = `You are an experienced external auditor performing a COMPREHENSIVE and DETAILED casting and cross-checking of financial statements. Be thorough and check EVERY number.
 
 CRITICAL PDF PARSING NOTE:
-When reading the extracted text, note reference numbers may be concatenated with amounts due to PDF extraction.
-For example: "960,245" might actually be Note "9" + Amount "60,245"
-To identify this:
-- Note references are typically 1-2 digit numbers (1-50) appearing before amounts
-- If a number seems unusually large or doesn't match the note details, check if the first 1-2 digits are a note reference
-- Compare amounts to the corresponding note disclosures to verify the correct figure
-- Common patterns: "5/3,860,288" means Note 5, Amount 3,860,288; "960,245" likely means Note 9, Amount 60,245
-- Always cross-reference amounts with the actual note details to confirm correct parsing
+When reading the extracted text, note reference numbers may be concatenated with amounts OR amounts may lose leading digits due to PDF column extraction issues.
+
+COMMON PARSING ERRORS TO WATCH FOR:
+1. Note number concatenated WITH amount: "960,245" might be Note "9" + Amount "60,245"
+2. Amount losing leading digit TO note column: "13,076,723" might appear as "1" (note) + "3,076,723" (amount) - WRONG! The actual amount is 13,076,723
+3. Note on different line bleeding into amount: If "Other payables" has Note 13, but "Trade payables" above shows "13,076,723", the "13" is NOT a note - it's part of the 13 million amount
+
+HOW TO VERIFY CORRECT AMOUNTS:
+- Cross-reference EVERY amount with the corresponding note disclosure
+- Check if amounts make sense in context (e.g., Trade payables of 3 million vs 13 million - which fits the business size?)
+- Look at prior year comparatives - amounts should be in similar magnitude
+- Verify subtotals: if Current Liabilities subtotal is 22,228,814, work backwards to verify individual line items
+- Note references are typically 1-2 digit numbers (1-50) and usually appear consistently formatted
+- If a line item has NO note reference in the original document, don't assume a leading digit is a note
+
+ALWAYS verify by checking:
+1. The note details for that line item
+2. The subtotals (individual items must add up to stated subtotal)
+3. Prior year amounts for reasonableness
 
 IMPORTANT: Verify ALL arithmetic carefully. Double-check every calculation before recording it. Identify even small rounding errors of RM 1 or less.
 

@@ -17,7 +17,6 @@ import {
   Moon,
   Sun,
   BarChart3,
-  Shield,
   Zap,
   FileCheck
 } from "lucide-react"
@@ -162,11 +161,6 @@ export default function FinancialStatementChecker() {
       icon: FileCheck,
       title: "Cross Referencing",
       description: "Verify notes to accounts with financial statements"
-    },
-    {
-      icon: Shield,
-      title: "Internal Consistency",
-      description: "Confirm Balance Sheet balances and reconciliations"
     }
   ]
 
@@ -221,7 +215,7 @@ export default function FinancialStatementChecker() {
         </div>
 
         {/* Features Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-3 gap-4 mb-8">
           {features.map((feature, index) => (
             <Card key={index} className="bg-card/50 border-border hover:border-primary/50 transition-all duration-300 hover:shadow-lg hover:-translate-y-1">
               <CardContent className="p-4 text-center">

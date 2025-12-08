@@ -3,10 +3,12 @@ import Anthropic from "@anthropic-ai/sdk"
 
 const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to perform complete casting and cross checking of financial statements with full accuracy. Follow all instructions strictly.
 
-1. Vertical casting Recompute every subtotal and total line by line. Add up all amounts independently. Identify any differences, including small rounding errors. Clearly display all recalculations.
-2. Horizontal casting Compare current year and prior year numbers. Highlight unusual or inconsistent movements. Confirm that year on year movements agree to the supporting notes. Flag any variances that do not reconcile.
+IMPORTANT: You have access to calculator tools. USE THEM for ALL arithmetic operations to ensure 100% accuracy. Do not perform mental math - always use the calculator tools provided.
+
+1. Vertical casting Recompute every subtotal and total line by line. Add up all amounts independently using the calculator tools. Identify any differences, including small rounding errors. Clearly display all recalculations.
+2. Horizontal casting Compare current year and prior year numbers. Use calculator tools to compute variances. Highlight unusual or inconsistent movements. Confirm that year on year movements agree to the supporting notes. Flag any variances that do not reconcile.
 3. Cross referencing to the notes Check that every number in the notes agrees exactly to the primary financial statements. Tie each note item to its corresponding line in the statements. Identify any mismatch, reclassification, rounding difference or missing linkage.
-4. Internal consistency checks Confirm that the Balance Sheet balances. Confirm that opening balances in notes match the prior year closing balances. Check that reconciliations such as PPE, receivables, payables, equity and borrowings are mathematically correct. Ensure subtotals used in ratios or analysis agree to underlying line items.
+4. Internal consistency checks Confirm that the Balance Sheet balances using calculator tools. Confirm that opening balances in notes match the prior year closing balances. Check that reconciliations such as PPE, receivables, payables, equity and borrowings are mathematically correct. Ensure subtotals used in ratios or analysis agree to underlying line items.
 5. Workings Show all workings in full. Do not summarise. Present step by step calculations, comparison tables, variance tables and tie out tables. Make every number traceable to the source figure.
 6. Exception reporting Prepare a complete list of discrepancies. Categorise them into casting errors, note vs statement mismatches, prior year vs current year inconsistencies and missing or incomplete disclosures. For each discrepancy, explain the cause and provide the corrected figure when possible.
 7. Audit quality requirements Do not assume or invent numbers. Use only the numbers given. Maintain professional scepticism. If something is unclear, state the issue explicitly. Ensure your output can be used directly in audit documentation.
@@ -32,10 +34,198 @@ IMPORTANT - Final output format (follow this order strictly):
 
 3. DETAILED WORKINGS - Full workings in order: vertical casting, horizontal casting, cross referencing, internal consistency checks. Show all calculations and tie-outs. Include verification of items that PASSED (balance correctly) in this section, not in the discrepancy summary.`
 
+// Define calculator tools
+const CALCULATOR_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "add",
+    description: "Add two numbers together. Use this for any addition operation.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        a: { type: "number", description: "First number" },
+        b: { type: "number", description: "Second number" },
+      },
+      required: ["a", "b"],
+    },
+  },
+  {
+    name: "subtract",
+    description: "Subtract the second number from the first. Use this for any subtraction operation.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        a: { type: "number", description: "Number to subtract from" },
+        b: { type: "number", description: "Number to subtract" },
+      },
+      required: ["a", "b"],
+    },
+  },
+  {
+    name: "multiply",
+    description: "Multiply two numbers together. Use this for any multiplication operation.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        a: { type: "number", description: "First number" },
+        b: { type: "number", description: "Second number" },
+      },
+      required: ["a", "b"],
+    },
+  },
+  {
+    name: "divide",
+    description: "Divide the first number by the second. Use this for any division operation.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        a: { type: "number", description: "Dividend (number to be divided)" },
+        b: { type: "number", description: "Divisor (number to divide by)" },
+      },
+      required: ["a", "b"],
+    },
+  },
+  {
+    name: "sum",
+    description: "Add multiple numbers together. Use this when you need to sum a list of values (e.g., adding up line items in a financial statement).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        numbers: {
+          type: "array",
+          items: { type: "number" },
+          description: "Array of numbers to sum",
+        },
+      },
+      required: ["numbers"],
+    },
+  },
+  {
+    name: "compare",
+    description: "Compare two numbers and return the difference. Use this to check if two values match and calculate any variance.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        expected: { type: "number", description: "Expected value" },
+        actual: { type: "number", description: "Actual value" },
+      },
+      required: ["expected", "actual"],
+    },
+  },
+  {
+    name: "percentage",
+    description: "Calculate percentage change or percentage of a value.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        value: { type: "number", description: "The value" },
+        base: { type: "number", description: "The base value (for percentage of) or previous value (for percentage change)" },
+        type: { type: "string", enum: ["of", "change"], description: "'of' for percentage of base, 'change' for percentage change from base" },
+      },
+      required: ["value", "base", "type"],
+    },
+  },
+  {
+    name: "round",
+    description: "Round a number to specified decimal places.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        value: { type: "number", description: "The number to round" },
+        decimals: { type: "number", description: "Number of decimal places (default 2)" },
+      },
+      required: ["value"],
+    },
+  },
+]
+
+// Execute calculator tool
+function executeCalculatorTool(toolName: string, input: Record<string, unknown>): string {
+  switch (toolName) {
+    case "add": {
+      const a = input.a as number
+      const b = input.b as number
+      const result = a + b
+      return JSON.stringify({ result, calculation: `${a} + ${b} = ${result}` })
+    }
+    case "subtract": {
+      const a = input.a as number
+      const b = input.b as number
+      const result = a - b
+      return JSON.stringify({ result, calculation: `${a} - ${b} = ${result}` })
+    }
+    case "multiply": {
+      const a = input.a as number
+      const b = input.b as number
+      const result = a * b
+      return JSON.stringify({ result, calculation: `${a} × ${b} = ${result}` })
+    }
+    case "divide": {
+      const a = input.a as number
+      const b = input.b as number
+      if (b === 0) {
+        return JSON.stringify({ error: "Division by zero", result: null })
+      }
+      const result = a / b
+      return JSON.stringify({ result, calculation: `${a} ÷ ${b} = ${result}` })
+    }
+    case "sum": {
+      const numbers = input.numbers as number[]
+      const result = numbers.reduce((acc, n) => acc + n, 0)
+      return JSON.stringify({
+        result,
+        calculation: `${numbers.join(" + ")} = ${result}`,
+        count: numbers.length,
+      })
+    }
+    case "compare": {
+      const expected = input.expected as number
+      const actual = input.actual as number
+      const difference = actual - expected
+      const matches = Math.abs(difference) < 0.01 // Allow for small rounding differences
+      return JSON.stringify({
+        expected,
+        actual,
+        difference,
+        absoluteDifference: Math.abs(difference),
+        matches,
+        status: matches ? "MATCH" : "DISCREPANCY",
+      })
+    }
+    case "percentage": {
+      const value = input.value as number
+      const base = input.base as number
+      const type = input.type as string
+      if (base === 0) {
+        return JSON.stringify({ error: "Base cannot be zero", result: null })
+      }
+      if (type === "of") {
+        const result = (value / base) * 100
+        return JSON.stringify({ result, calculation: `${value} is ${result.toFixed(2)}% of ${base}` })
+      } else {
+        const result = ((value - base) / base) * 100
+        return JSON.stringify({
+          result,
+          calculation: `Change from ${base} to ${value} = ${result.toFixed(2)}%`,
+          direction: result > 0 ? "increase" : result < 0 ? "decrease" : "no change",
+        })
+      }
+    }
+    case "round": {
+      const value = input.value as number
+      const decimals = (input.decimals as number) ?? 2
+      const result = Math.round(value * Math.pow(10, decimals)) / Math.pow(10, decimals)
+      return JSON.stringify({ result, original: value, decimals })
+    }
+    default:
+      return JSON.stringify({ error: `Unknown tool: ${toolName}` })
+  }
+}
+
 export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   const startTime = Date.now()
   const logs: string[] = []
+  const toolCalls: Array<{ tool: string; input: unknown; output: string; iteration: number }> = []
 
   const log = (message: string, data?: unknown) => {
     const timestamp = new Date().toISOString()
@@ -92,107 +282,180 @@ export async function POST(request: NextRequest) {
       dangerouslyAllowBrowser: true,
     })
 
+    const toolNames = CALCULATOR_TOOLS.map((t) => t.name)
     log("=== CLAUDE API REQUEST ===")
     log("Model", "claude-sonnet-4-20250514")
     log("Max tokens", 16000)
-    log("Tools configured", { hasTools: false, toolCount: 0, toolNames: [] })
+    log("Tools configured", { hasTools: true, toolCount: CALCULATOR_TOOLS.length, toolNames })
     log("System prompt length", AUDIT_PROMPT.length)
 
     const apiStartTime = Date.now()
 
-    const message = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 16000,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "document",
-              source: {
-                type: "base64",
-                media_type: "application/pdf",
-                data: cleanBase64,
-              },
+    // Initial message with PDF
+    const messages: Anthropic.MessageParam[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: cleanBase64,
             },
-            {
-              type: "text",
-              text: `${AUDIT_PROMPT}\n\nPlease analyze the financial statement document (${fileName}) and perform a comprehensive casting check following all the requirements above.`,
-            },
-          ],
-        },
-      ],
-    })
+          },
+          {
+            type: "text",
+            text: `${AUDIT_PROMPT}\n\nPlease analyze the financial statement document (${fileName}) and perform a comprehensive casting check following all the requirements above. USE THE CALCULATOR TOOLS for all arithmetic operations to ensure accuracy.`,
+          },
+        ],
+      },
+    ]
 
-    const apiDuration = Date.now() - apiStartTime
+    let iteration = 0
+    const maxIterations = 50 // Safety limit
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let finalAnalysis = ""
+    let lastMessage: Anthropic.Message | null = null
 
-    log("=== CLAUDE API RESPONSE ===")
-    log("API call duration", { durationMs: apiDuration, durationSec: (apiDuration / 1000).toFixed(2) })
-    log("Response ID", message.id)
-    log("Model used", message.model)
-    log("Stop reason", message.stop_reason)
-    log("Token usage", {
-      inputTokens: message.usage.input_tokens,
-      outputTokens: message.usage.output_tokens,
-      totalTokens: message.usage.input_tokens + message.usage.output_tokens,
-    })
+    log("=== STARTING TOOL USE LOOP ===")
 
-    // Analyze content blocks
-    const contentBlockAnalysis = message.content.map((block, index) => ({
-      index,
-      type: block.type,
-      ...(block.type === "text" && { textLength: block.text.length, preview: block.text.substring(0, 100) + "..." }),
-      ...(block.type === "tool_use" && { toolName: (block as { name: string }).name, toolId: (block as { id: string }).id }),
-    }))
+    // Tool use loop
+    while (iteration < maxIterations) {
+      iteration++
+      log(`--- Iteration ${iteration} ---`)
 
-    log("Content blocks received", { count: message.content.length, blocks: contentBlockAnalysis })
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 16000,
+        tools: CALCULATOR_TOOLS,
+        messages,
+      })
 
-    // Check for tool usage
-    const toolUseBlocks = message.content.filter((block) => block.type === "tool_use")
-    const textBlocks = message.content.filter((block) => block.type === "text")
+      lastMessage = message
+      totalInputTokens += message.usage.input_tokens
+      totalOutputTokens += message.usage.output_tokens
 
-    log("=== TOOL USAGE ANALYSIS ===")
-    log("Tool calls made by Claude", {
-      toolCallCount: toolUseBlocks.length,
-      hasToolCalls: toolUseBlocks.length > 0,
-      message: toolUseBlocks.length === 0
-        ? "No tools were called - Claude performed analysis using built-in reasoning only"
-        : `Claude called ${toolUseBlocks.length} tool(s)`,
-    })
+      log(`Iteration ${iteration} response`, {
+        stopReason: message.stop_reason,
+        contentBlocks: message.content.length,
+        inputTokens: message.usage.input_tokens,
+        outputTokens: message.usage.output_tokens,
+      })
 
-    if (toolUseBlocks.length > 0) {
-      toolUseBlocks.forEach((block, index) => {
-        const toolBlock = block as { type: "tool_use"; id: string; name: string; input: unknown }
-        log(`Tool call #${index + 1}`, {
-          toolName: toolBlock.name,
-          toolId: toolBlock.id,
-          input: toolBlock.input,
-        })
+      // Check if we're done (no more tool use)
+      if (message.stop_reason === "end_turn") {
+        log("=== TOOL USE LOOP COMPLETED ===", { totalIterations: iteration })
+
+        // Extract final text response
+        const textBlocks = message.content.filter((block) => block.type === "text")
+        finalAnalysis = textBlocks
+          .map((block) => ("text" in block ? block.text : ""))
+          .join("\n\n")
+        break
+      }
+
+      // Process tool use blocks
+      const toolUseBlocks = message.content.filter((block) => block.type === "tool_use")
+
+      if (toolUseBlocks.length === 0) {
+        // No tool use and not end_turn - extract text and break
+        const textBlocks = message.content.filter((block) => block.type === "text")
+        finalAnalysis = textBlocks
+          .map((block) => ("text" in block ? block.text : ""))
+          .join("\n\n")
+        break
+      }
+
+      // Build tool results
+      const toolResults: Anthropic.ToolResultBlockParam[] = []
+
+      for (const block of toolUseBlocks) {
+        if (block.type === "tool_use") {
+          const toolInput = block.input as Record<string, unknown>
+          const toolOutput = executeCalculatorTool(block.name, toolInput)
+
+          toolCalls.push({
+            tool: block.name,
+            input: toolInput,
+            output: toolOutput,
+            iteration,
+          })
+
+          log(`Tool call: ${block.name}`, { input: toolInput, output: JSON.parse(toolOutput) })
+
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: toolOutput,
+          })
+        }
+      }
+
+      // Add assistant message and tool results to conversation
+      messages.push({
+        role: "assistant",
+        content: message.content,
+      })
+
+      messages.push({
+        role: "user",
+        content: toolResults,
       })
     }
 
-    // Extract the text response
-    const analysis = textBlocks
-      .map((block) => ("text" in block ? block.text : ""))
-      .join("\n\n")
+    const apiDuration = Date.now() - apiStartTime
+
+    log("=== CLAUDE API RESPONSE SUMMARY ===")
+    log("API call duration", { durationMs: apiDuration, durationSec: (apiDuration / 1000).toFixed(2) })
+    log("Total iterations", iteration)
+    log("Total tool calls", toolCalls.length)
+    log("Token usage", {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens,
+    })
+
+    // Analyze tool usage
+    const toolUsageSummary = toolCalls.reduce((acc, call) => {
+      acc[call.tool] = (acc[call.tool] || 0) + 1
+      return acc
+    }, {} as Record<string, number>)
+
+    log("=== TOOL USAGE ANALYSIS ===")
+    log("Tool calls by type", toolUsageSummary)
+    log("Tool calls made by Claude", {
+      toolCallCount: toolCalls.length,
+      hasToolCalls: toolCalls.length > 0,
+      message: toolCalls.length === 0
+        ? "No tools were called - Claude performed analysis using built-in reasoning only"
+        : `Claude called ${toolCalls.length} tool(s) across ${iteration} iteration(s)`,
+    })
 
     log("=== RESPONSE SUMMARY ===")
-    log("Analysis length", { characters: analysis.length, words: analysis.split(/\s+/).length })
+    log("Analysis length", { characters: finalAnalysis.length, words: finalAnalysis.split(/\s+/).length })
     log("Total request duration", { durationMs: Date.now() - startTime, durationSec: ((Date.now() - startTime) / 1000).toFixed(2) })
     log("=== REQUEST COMPLETED ===")
 
     return NextResponse.json({
-      analysis,
-      model: message.model,
-      usage: message.usage,
+      analysis: finalAnalysis,
+      model: lastMessage?.model || "claude-sonnet-4-20250514",
+      usage: {
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+      },
       debug: {
         requestId,
         totalDurationMs: Date.now() - startTime,
         apiDurationMs: apiDuration,
-        toolsConfigured: false,
-        toolsCalled: toolUseBlocks.length,
-        contentBlocks: contentBlockAnalysis,
-        stopReason: message.stop_reason,
+        toolsConfigured: true,
+        toolsAvailable: toolNames,
+        toolsCalled: toolCalls.length,
+        toolUsageSummary,
+        iterations: iteration,
+        toolCallDetails: toolCalls,
+        stopReason: lastMessage?.stop_reason,
         logs,
       },
     })
@@ -207,13 +470,13 @@ export async function POST(request: NextRequest) {
     if (error instanceof Error) {
       return NextResponse.json({
         error: error.message,
-        debug: { requestId, logs, durationMs: Date.now() - startTime }
+        debug: { requestId, logs, toolCalls, durationMs: Date.now() - startTime }
       }, { status: 500 })
     }
 
     return NextResponse.json({
       error: "Failed to analyze financial statement",
-      debug: { requestId, logs, durationMs: Date.now() - startTime }
+      debug: { requestId, logs, toolCalls, durationMs: Date.now() - startTime }
     }, { status: 500 })
   }
 }

@@ -21,6 +21,16 @@ async function extractPdfText(base64Data: string): Promise<{ text: string; pages
 
 const AUDIT_PROMPT = `You are an experienced external auditor performing a COMPREHENSIVE and DETAILED casting and cross-checking of financial statements. Be thorough and check EVERY number.
 
+CRITICAL PDF PARSING NOTE:
+When reading the extracted text, note reference numbers may be concatenated with amounts due to PDF extraction.
+For example: "960,245" might actually be Note "9" + Amount "60,245"
+To identify this:
+- Note references are typically 1-2 digit numbers (1-50) appearing before amounts
+- If a number seems unusually large or doesn't match the note details, check if the first 1-2 digits are a note reference
+- Compare amounts to the corresponding note disclosures to verify the correct figure
+- Common patterns: "5/3,860,288" means Note 5, Amount 3,860,288; "960,245" likely means Note 9, Amount 60,245
+- Always cross-reference amounts with the actual note details to confirm correct parsing
+
 IMPORTANT: Verify ALL arithmetic carefully. Double-check every calculation before recording it. Identify even small rounding errors of RM 1 or less.
 
 Perform these checks IN DETAIL:

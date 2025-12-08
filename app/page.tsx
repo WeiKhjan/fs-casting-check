@@ -2,27 +2,27 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Upload, FileText, Loader2, CheckCircle2, AlertCircle } from "lucide-react"
+import { Upload, FileText, Loader2, CheckCircle2, AlertCircle, Download, ExternalLink } from "lucide-react"
 
 export default function FinancialStatementChecker() {
   const [file, setFile] = useState<File | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
-  const [result, setResult] = useState<string>("")
+  const [htmlResult, setHtmlResult] = useState<string>("")
   const [error, setError] = useState<string>("")
+  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (selectedFile && selectedFile.type === "application/pdf") {
       setFile(selectedFile)
       setError("")
-      setResult("")
+      setHtmlResult("")
     } else {
       setError("Please select a valid PDF file")
       setFile(null)
@@ -37,7 +37,7 @@ export default function FinancialStatementChecker() {
 
     setIsAnalyzing(true)
     setError("")
-    setResult("")
+    setHtmlResult("")
 
     try {
       // Convert file to base64
@@ -51,6 +51,7 @@ export default function FinancialStatementChecker() {
         body: JSON.stringify({
           pdfBase64: base64,
           fileName: file.name,
+          outputFormat: "html",
         }),
       })
 
@@ -60,12 +61,32 @@ export default function FinancialStatementChecker() {
       }
 
       const data = await response.json()
-      setResult(data.analysis)
+      setHtmlResult(data.html)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred during analysis")
     } finally {
       setIsAnalyzing(false)
     }
+  }
+
+  const handleDownload = () => {
+    if (!htmlResult) return
+    const blob = new Blob([htmlResult], { type: "text/html" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `casting-check-${file?.name?.replace(".pdf", "") || "report"}-${new Date().toISOString().split("T")[0]}.html`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleOpenInNewTab = () => {
+    if (!htmlResult) return
+    const blob = new Blob([htmlResult], { type: "text/html" })
+    const url = URL.createObjectURL(blob)
+    window.open(url, "_blank")
   }
 
   const fileToBase64 = (file: File): Promise<string> => {
@@ -142,17 +163,37 @@ export default function FinancialStatementChecker() {
             </Alert>
           )}
 
-          {result && (
+          {htmlResult && (
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <CheckCircle2 className="w-5 h-5 text-green-600" />
-                  Analysis Results
-                </CardTitle>
-                <CardDescription>Comprehensive casting check and audit findings</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-green-600" />
+                      Analysis Results
+                    </CardTitle>
+                    <CardDescription>Comprehensive casting check and audit findings</CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={handleOpenInNewTab}>
+                      <ExternalLink className="w-4 h-4 mr-2" />
+                      Open Full Report
+                    </Button>
+                    <Button variant="default" size="sm" onClick={handleDownload}>
+                      <Download className="w-4 h-4 mr-2" />
+                      Download HTML
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
-                <Textarea value={result} readOnly className="min-h-[500px] font-mono text-sm" />
+                <iframe
+                  ref={iframeRef}
+                  srcDoc={htmlResult}
+                  className="w-full border rounded-lg bg-white"
+                  style={{ height: "700px" }}
+                  title="Casting Check Report"
+                />
               </CardContent>
             </Card>
           )}

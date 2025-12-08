@@ -265,7 +265,7 @@ export async function POST(request: NextRequest) {
 
     const genAI = new GoogleGenerativeAI(apiKey)
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-preview-05-20",
+      model: "gemini-2.5-flash",
       generationConfig: {
         maxOutputTokens: 16000,
         temperature: 0.1,
@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
     })
 
     log("=== GEMINI API REQUEST (Direct PDF Vision) ===")
-    log("Model", "gemini-2.5-flash-preview-05-20")
+    log("Model", "gemini-2.5-flash")
     log("Max tokens", 16000)
     log("PDF Size", `${pdfSizeKB} KB`)
 
@@ -330,7 +330,7 @@ export async function POST(request: NextRequest) {
     log("Stop reason", "completed")
 
     // Calculate costs
-    const modelUsed = "gemini-2.5-flash-preview-05-20"
+    const modelUsed = "gemini-2.5-flash"
     const costs = calculateCost(modelUsed, totalInputTokens, totalOutputTokens)
     log("Cost calculation", costs)
 
@@ -462,7 +462,7 @@ export async function POST(request: NextRequest) {
         file_name: fileName,
         file_size_bytes: fileSizeBytes,
         file_size_mb: fileSizeMB,
-        model: "gemini-2.5-flash-preview-05-20",
+        model: "gemini-2.5-flash",
         input_tokens: 0,
         output_tokens: 0,
         total_tokens: 0,

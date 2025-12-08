@@ -53,7 +53,7 @@ export interface JobAnalytics {
 
 // Pricing for Gemini 2.5 Flash (per 1M tokens) - Paid Tier
 const PRICING = {
-  "gemini-2.5-flash-preview-05-20": {
+  "gemini-2.5-flash": {
     input: 0.30,   // $0.30 per 1M input tokens (text/image/video)
     output: 2.50,  // $2.50 per 1M output tokens (including thinking tokens)
   },

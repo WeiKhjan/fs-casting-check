@@ -21,11 +21,11 @@ async function extractPdfText(base64Data: string): Promise<{ text: string; pages
 
 const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to perform complete casting and cross checking of financial statements with full accuracy.
 
-IMPORTANT: You have access to calculator tools. USE THEM for ALL arithmetic operations to ensure 100% accuracy. Do not perform mental math.
+IMPORTANT: Verify ALL arithmetic carefully. Double-check every calculation before recording it. Show your work mentally and ensure sums match stated totals.
 
 Perform these checks:
-1. Vertical casting - Recompute every subtotal and total line by line using calculator tools
-2. Horizontal casting - Compare current year and prior year, compute variances using calculator tools
+1. Vertical casting - Recompute every subtotal and total line by line
+2. Horizontal casting - Compare current year and prior year, compute variances
 3. Cross referencing - Check every number in notes agrees to primary statements
 4. Internal consistency - Confirm Balance Sheet balances, opening balances match prior year closing
 
@@ -111,193 +111,6 @@ Rules:
 - Pass rate is percentage rounded to nearest integer
 - Format all monetary values consistently as "RM X,XXX,XXX"`
 
-// Define calculator tools
-const CALCULATOR_TOOLS: Anthropic.Tool[] = [
-  {
-    name: "add",
-    description: "Add two numbers together. Use this for any addition operation.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        a: { type: "number", description: "First number" },
-        b: { type: "number", description: "Second number" },
-      },
-      required: ["a", "b"],
-    },
-  },
-  {
-    name: "subtract",
-    description: "Subtract the second number from the first. Use this for any subtraction operation.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        a: { type: "number", description: "Number to subtract from" },
-        b: { type: "number", description: "Number to subtract" },
-      },
-      required: ["a", "b"],
-    },
-  },
-  {
-    name: "multiply",
-    description: "Multiply two numbers together. Use this for any multiplication operation.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        a: { type: "number", description: "First number" },
-        b: { type: "number", description: "Second number" },
-      },
-      required: ["a", "b"],
-    },
-  },
-  {
-    name: "divide",
-    description: "Divide the first number by the second. Use this for any division operation.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        a: { type: "number", description: "Dividend (number to be divided)" },
-        b: { type: "number", description: "Divisor (number to divide by)" },
-      },
-      required: ["a", "b"],
-    },
-  },
-  {
-    name: "sum",
-    description: "Add multiple numbers together. Use this when you need to sum a list of values (e.g., adding up line items in a financial statement).",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        numbers: {
-          type: "array",
-          items: { type: "number" },
-          description: "Array of numbers to sum",
-        },
-      },
-      required: ["numbers"],
-    },
-  },
-  {
-    name: "compare",
-    description: "Compare two numbers and return the difference. Use this to check if two values match and calculate any variance.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        expected: { type: "number", description: "Expected value" },
-        actual: { type: "number", description: "Actual value" },
-      },
-      required: ["expected", "actual"],
-    },
-  },
-  {
-    name: "percentage",
-    description: "Calculate percentage change or percentage of a value.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        value: { type: "number", description: "The value" },
-        base: { type: "number", description: "The base value (for percentage of) or previous value (for percentage change)" },
-        type: { type: "string", enum: ["of", "change"], description: "'of' for percentage of base, 'change' for percentage change from base" },
-      },
-      required: ["value", "base", "type"],
-    },
-  },
-  {
-    name: "round",
-    description: "Round a number to specified decimal places.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        value: { type: "number", description: "The number to round" },
-        decimals: { type: "number", description: "Number of decimal places (default 2)" },
-      },
-      required: ["value"],
-    },
-  },
-]
-
-// Execute calculator tool
-function executeCalculatorTool(toolName: string, input: Record<string, unknown>): string {
-  switch (toolName) {
-    case "add": {
-      const a = input.a as number
-      const b = input.b as number
-      const result = a + b
-      return JSON.stringify({ result, calculation: `${a} + ${b} = ${result}` })
-    }
-    case "subtract": {
-      const a = input.a as number
-      const b = input.b as number
-      const result = a - b
-      return JSON.stringify({ result, calculation: `${a} - ${b} = ${result}` })
-    }
-    case "multiply": {
-      const a = input.a as number
-      const b = input.b as number
-      const result = a * b
-      return JSON.stringify({ result, calculation: `${a} × ${b} = ${result}` })
-    }
-    case "divide": {
-      const a = input.a as number
-      const b = input.b as number
-      if (b === 0) {
-        return JSON.stringify({ error: "Division by zero", result: null })
-      }
-      const result = a / b
-      return JSON.stringify({ result, calculation: `${a} ÷ ${b} = ${result}` })
-    }
-    case "sum": {
-      const numbers = input.numbers as number[]
-      const result = numbers.reduce((acc, n) => acc + n, 0)
-      return JSON.stringify({
-        result,
-        calculation: `${numbers.join(" + ")} = ${result}`,
-        count: numbers.length,
-      })
-    }
-    case "compare": {
-      const expected = input.expected as number
-      const actual = input.actual as number
-      const difference = actual - expected
-      const matches = Math.abs(difference) < 0.01
-      return JSON.stringify({
-        expected,
-        actual,
-        difference,
-        absoluteDifference: Math.abs(difference),
-        matches,
-        status: matches ? "MATCH" : "DISCREPANCY",
-      })
-    }
-    case "percentage": {
-      const value = input.value as number
-      const base = input.base as number
-      const type = input.type as string
-      if (base === 0) {
-        return JSON.stringify({ error: "Base cannot be zero", result: null })
-      }
-      if (type === "of") {
-        const result = (value / base) * 100
-        return JSON.stringify({ result, calculation: `${value} is ${result.toFixed(2)}% of ${base}` })
-      } else {
-        const result = ((value - base) / base) * 100
-        return JSON.stringify({
-          result,
-          calculation: `Change from ${base} to ${value} = ${result.toFixed(2)}%`,
-          direction: result > 0 ? "increase" : result < 0 ? "decrease" : "no change",
-        })
-      }
-    }
-    case "round": {
-      const value = input.value as number
-      const decimals = (input.decimals as number) ?? 2
-      const result = Math.round(value * Math.pow(10, decimals)) / Math.pow(10, decimals)
-      return JSON.stringify({ result, original: value, decimals })
-    }
-    default:
-      return JSON.stringify({ error: `Unknown tool: ${toolName}` })
-  }
-}
-
 // Parse JSON from Claude's response (handles potential markdown wrapping)
 function parseAuditJson(text: string): AuditDashboardData | null {
   // Try to extract JSON from the response
@@ -347,7 +160,6 @@ export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
   const startTime = Date.now()
   const logs: string[] = []
-  const toolCalls: Array<{ tool: string; input: unknown; output: string; iteration: number }> = []
   let fileName = "unknown"
   let cleanBase64 = ""
 
@@ -418,36 +230,12 @@ export async function POST(request: NextRequest) {
       dangerouslyAllowBrowser: true,
     })
 
-    const toolNames = CALCULATOR_TOOLS.map((t) => t.name)
     log("=== CLAUDE API REQUEST ===")
     log("Model", "claude-sonnet-4-20250514")
     log("Max tokens", 16000)
-    log("Tools configured", { hasTools: true, toolCount: CALCULATOR_TOOLS.length, toolNames })
     log("System prompt length", AUDIT_PROMPT.length)
 
     const apiStartTime = Date.now()
-
-    // Initial message with extracted text (instead of raw PDF to reduce tokens)
-    const messages: Anthropic.MessageParam[] = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: `${AUDIT_PROMPT}\n\n=== FINANCIAL STATEMENT DOCUMENT: ${fileName} (${pdfPages} pages) ===\n\n${pdfText}\n\n=== END OF DOCUMENT ===\n\nAnalyze the financial statement above and perform a comprehensive casting check. USE THE CALCULATOR TOOLS for all arithmetic. Return ONLY the JSON structure specified above.`,
-          },
-        ],
-      },
-    ]
-
-    let iteration = 0
-    const maxIterations = 50
-    let totalInputTokens = 0
-    let totalOutputTokens = 0
-    let finalAnalysis = ""
-    let lastMessage: Anthropic.Message | null = null
-
-    log("=== STARTING TOOL USE LOOP ===")
 
     // Helper function to call API with retry on rate limit
     const callWithRetry = async (retryCount = 0): Promise<Anthropic.Message> => {
@@ -455,8 +243,12 @@ export async function POST(request: NextRequest) {
         return await anthropic.messages.create({
           model: "claude-sonnet-4-20250514",
           max_tokens: 16000,
-          tools: CALCULATOR_TOOLS,
-          messages,
+          messages: [
+            {
+              role: "user",
+              content: `${AUDIT_PROMPT}\n\n=== FINANCIAL STATEMENT DOCUMENT: ${fileName} (${pdfPages} pages) ===\n\n${pdfText}\n\n=== END OF DOCUMENT ===\n\nAnalyze the financial statement above and perform a comprehensive casting check. Return ONLY the JSON structure specified above.`,
+            },
+          ],
         })
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
@@ -470,100 +262,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Tool use loop
-    while (iteration < maxIterations) {
-      iteration++
-      log(`--- Iteration ${iteration} ---`)
-
-      const message = await callWithRetry()
-
-      lastMessage = message
-      totalInputTokens += message.usage.input_tokens
-      totalOutputTokens += message.usage.output_tokens
-
-      log(`Iteration ${iteration} response`, {
-        stopReason: message.stop_reason,
-        contentBlocks: message.content.length,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-      })
-
-      if (message.stop_reason === "end_turn") {
-        log("=== TOOL USE LOOP COMPLETED ===", { totalIterations: iteration })
-        const textBlocks = message.content.filter((block) => block.type === "text")
-        finalAnalysis = textBlocks
-          .map((block) => ("text" in block ? block.text : ""))
-          .join("\n\n")
-        break
-      }
-
-      const toolUseBlocks = message.content.filter((block) => block.type === "tool_use")
-
-      if (toolUseBlocks.length === 0) {
-        const textBlocks = message.content.filter((block) => block.type === "text")
-        finalAnalysis = textBlocks
-          .map((block) => ("text" in block ? block.text : ""))
-          .join("\n\n")
-        break
-      }
-
-      const toolResults: Anthropic.ToolResultBlockParam[] = []
-
-      for (const block of toolUseBlocks) {
-        if (block.type === "tool_use") {
-          const toolInput = block.input as Record<string, unknown>
-          const toolOutput = executeCalculatorTool(block.name, toolInput)
-
-          toolCalls.push({
-            tool: block.name,
-            input: toolInput,
-            output: toolOutput,
-            iteration,
-          })
-
-          log(`Tool call: ${block.name}`, { input: toolInput, output: JSON.parse(toolOutput) })
-
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: toolOutput,
-          })
-        }
-      }
-
-      messages.push({
-        role: "assistant",
-        content: message.content,
-      })
-
-      messages.push({
-        role: "user",
-        content: toolResults,
-      })
-    }
+    log("=== CALLING CLAUDE API (single request) ===")
+    const message = await callWithRetry()
 
     const apiDuration = Date.now() - apiStartTime
+    const totalInputTokens = message.usage.input_tokens
+    const totalOutputTokens = message.usage.output_tokens
+
+    // Extract text response
+    const textBlocks = message.content.filter((block) => block.type === "text")
+    const finalAnalysis = textBlocks
+      .map((block) => ("text" in block ? block.text : ""))
+      .join("\n\n")
 
     log("=== CLAUDE API RESPONSE SUMMARY ===")
     log("API call duration", { durationMs: apiDuration, durationSec: (apiDuration / 1000).toFixed(2) })
-    log("Total iterations", iteration)
-    log("Total tool calls", toolCalls.length)
     log("Token usage", {
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
       totalTokens: totalInputTokens + totalOutputTokens,
     })
-
-    const toolUsageSummary = toolCalls.reduce((acc, call) => {
-      acc[call.tool] = (acc[call.tool] || 0) + 1
-      return acc
-    }, {} as Record<string, number>)
-
-    log("=== TOOL USAGE ANALYSIS ===")
-    log("Tool calls by type", toolUsageSummary)
+    log("Stop reason", message.stop_reason)
 
     // Calculate costs
-    const modelUsed = lastMessage?.model || "claude-sonnet-4-20250514"
+    const modelUsed = message.model || "claude-sonnet-4-20250514"
     const costs = calculateCost(modelUsed, totalInputTokens, totalOutputTokens)
     log("Cost calculation", costs)
 
@@ -607,13 +329,13 @@ export async function POST(request: NextRequest) {
       input_cost_usd: costs.inputCost,
       output_cost_usd: costs.outputCost,
       total_cost_usd: costs.totalCost,
-      tools_configured: true,
-      tools_called: toolCalls.length,
-      tool_usage_summary: toolUsageSummary,
-      iterations: iteration,
+      tools_configured: false,
+      tools_called: 0,
+      tool_usage_summary: {},
+      iterations: 1,
       api_duration_ms: apiDuration,
       total_duration_ms: Date.now() - startTime,
-      stop_reason: lastMessage?.stop_reason || "unknown",
+      stop_reason: message.stop_reason || "unknown",
       analysis_length_chars: finalAnalysis.length,
       analysis_length_words: finalAnalysis.split(/\s+/).length,
       discrepancies_found: discrepanciesFound,
@@ -645,12 +367,7 @@ export async function POST(request: NextRequest) {
           apiDurationMs: apiDuration,
           fileSizeBytes,
           fileSizeMB,
-          toolsConfigured: true,
-          toolsAvailable: toolNames,
-          toolsCalled: toolCalls.length,
-          toolUsageSummary,
-          iterations: iteration,
-          stopReason: lastMessage?.stop_reason,
+          stopReason: message.stop_reason,
           analyticsSaved: saveResult.success,
         },
       })
@@ -676,12 +393,7 @@ export async function POST(request: NextRequest) {
         apiDurationMs: apiDuration,
         fileSizeBytes,
         fileSizeMB,
-        toolsConfigured: true,
-        toolsAvailable: toolNames,
-        toolsCalled: toolCalls.length,
-        toolUsageSummary,
-        iterations: iteration,
-        stopReason: lastMessage?.stop_reason,
+        stopReason: message.stop_reason,
         discrepanciesFound,
         analyticsSaved: saveResult.success,
       },
@@ -711,8 +423,8 @@ export async function POST(request: NextRequest) {
         input_cost_usd: 0,
         output_cost_usd: 0,
         total_cost_usd: 0,
-        tools_configured: true,
-        tools_called: toolCalls.length,
+        tools_configured: false,
+        tools_called: 0,
         tool_usage_summary: {},
         iterations: 0,
         api_duration_ms: 0,
@@ -731,13 +443,13 @@ export async function POST(request: NextRequest) {
     if (error instanceof Error) {
       return NextResponse.json({
         error: error.message,
-        debug: { requestId, logs, toolCalls, durationMs: Date.now() - startTime }
+        debug: { requestId, logs, durationMs: Date.now() - startTime }
       }, { status: 500 })
     }
 
     return NextResponse.json({
       error: "Failed to analyze financial statement",
-      debug: { requestId, logs, toolCalls, durationMs: Date.now() - startTime }
+      debug: { requestId, logs, durationMs: Date.now() - startTime }
     }, { status: 500 })
   }
 }

@@ -2,6 +2,22 @@ import { type NextRequest, NextResponse } from "next/server"
 import Anthropic from "@anthropic-ai/sdk"
 import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supabase"
 import { generateDashboardHtml, type AuditDashboardData } from "@/lib/dashboard-template"
+import pdf from "pdf-parse"
+
+// Extract text from PDF to reduce token usage (90k -> ~15-25k tokens)
+async function extractPdfText(base64Data: string): Promise<{ text: string; pages: number }> {
+  try {
+    const buffer = Buffer.from(base64Data, "base64")
+    const data = await pdf(buffer)
+    return {
+      text: data.text,
+      pages: data.numpages,
+    }
+  } catch (error) {
+    console.error("PDF text extraction failed:", error)
+    throw new Error("Failed to extract text from PDF. Please ensure the PDF is not encrypted or corrupted.")
+  }
+}
 
 const AUDIT_PROMPT = `You are an experienced external auditor. Your task is to perform complete casting and cross checking of financial statements with full accuracy.
 
@@ -385,6 +401,18 @@ export async function POST(request: NextRequest) {
     const pdfSizeKB = Math.round((cleanBase64.length * 3) / 4 / 1024)
     log("PDF processed", { base64Length: cleanBase64.length, estimatedSizeKB: pdfSizeKB })
 
+    // Extract text from PDF to reduce token usage (90k -> ~15-25k tokens)
+    log("=== EXTRACTING PDF TEXT ===")
+    const { text: pdfText, pages: pdfPages } = await extractPdfText(cleanBase64)
+    const textLength = pdfText.length
+    const estimatedTokens = Math.round(textLength / 4) // Rough estimate: 4 chars per token
+    log("PDF text extracted", {
+      pages: pdfPages,
+      textLength,
+      estimatedTokens,
+      tokenReduction: `~${Math.round((1 - estimatedTokens / 90000) * 100)}% reduction from raw PDF`,
+    })
+
     const anthropic = new Anthropic({
       apiKey: apiKey,
       dangerouslyAllowBrowser: true,
@@ -399,22 +427,14 @@ export async function POST(request: NextRequest) {
 
     const apiStartTime = Date.now()
 
-    // Initial message with PDF
+    // Initial message with extracted text (instead of raw PDF to reduce tokens)
     const messages: Anthropic.MessageParam[] = [
       {
         role: "user",
         content: [
           {
-            type: "document",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: cleanBase64,
-            },
-          },
-          {
             type: "text",
-            text: `${AUDIT_PROMPT}\n\nAnalyze the financial statement document (${fileName}) and perform a comprehensive casting check. USE THE CALCULATOR TOOLS for all arithmetic. Return ONLY the JSON structure specified above.`,
+            text: `${AUDIT_PROMPT}\n\n=== FINANCIAL STATEMENT DOCUMENT: ${fileName} (${pdfPages} pages) ===\n\n${pdfText}\n\n=== END OF DOCUMENT ===\n\nAnalyze the financial statement above and perform a comprehensive casting check. USE THE CALCULATOR TOOLS for all arithmetic. Return ONLY the JSON structure specified above.`,
           },
         ],
       },
@@ -579,6 +599,7 @@ export async function POST(request: NextRequest) {
       file_name: fileName,
       file_size_bytes: fileSizeBytes,
       file_size_mb: fileSizeMB,
+      pdf_pages: pdfPages,
       model: modelUsed,
       input_tokens: totalInputTokens,
       output_tokens: totalOutputTokens,

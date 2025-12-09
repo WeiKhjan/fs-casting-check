@@ -2,177 +2,20 @@ import { type NextRequest, NextResponse } from "next/server"
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai"
 import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supabase"
 import { generateDashboardHtml, type AuditDashboardData } from "@/lib/dashboard-template"
+import { ExtractionResult } from "@/lib/extraction-types"
+import { runVerification, toAuditDashboardData } from "@/lib/verification-engine"
+import EXTRACTION_PROMPT from "@/lib/extraction-prompt"
 
-const AUDIT_PROMPT = `You are an experienced external auditor performing a COMPREHENSIVE and DETAILED casting and cross-checking of financial statements. Be thorough and check EVERY number.
-
-You are viewing the PDF document directly. Carefully examine all tables, numbers, and formatting as they appear in the original document.
-
-IMPORTANT: Verify ALL arithmetic carefully. Double-check every calculation before recording it. Identify even small rounding errors of RM 1 or less.
-
-ALWAYS verify by checking:
-1. The note details for each line item
-2. The subtotals (individual items must add up to stated subtotal)
-3. Prior year amounts for reasonableness
-
-Perform these checks IN DETAIL:
-
-1. VERTICAL CASTING (Be Exhaustive)
-   - Recompute EVERY subtotal and total line by line
-   - Add up all amounts independently for each section
-   - Check: Statement of Financial Position (Assets, Liabilities, Equity sections)
-   - Check: Statement of Comprehensive Income (Revenue, Expenses, Profit lines)
-   - Check: Statement of Changes in Equity (all columns and rows)
-   - Check: Statement of Cash Flows (Operating, Investing, Financing sections)
-   - Check: EVERY note that has numerical subtotals or totals
-   - Identify ANY differences, including small rounding errors
-   - Clearly display all recalculations with component breakdown
-
-2. HORIZONTAL CASTING (Movement Analysis)
-   - Compare current year and prior year numbers for all major line items
-   - Highlight unusual or inconsistent movements
-   - Confirm that year-on-year movements agree to the supporting notes
-   - Check note reconciliations: PPE movements, receivables aging, payables aging, borrowings, equity movements
-   - Flag any variances that do not reconcile
-   - Verify opening balances equal prior year closing balances
-
-3. CROSS REFERENCING TO NOTES (Tie Every Number)
-   - Check that EVERY number in the notes agrees EXACTLY to the primary financial statements
-   - Tie each note item to its corresponding line in the statements
-   - Identify any mismatch, reclassification, rounding difference, or missing linkage
-   - Cross-check note totals back to face of financial statements
-   - Verify disclosure completeness
-
-4. INTERNAL CONSISTENCY CHECKS
-   - Confirm that the Balance Sheet balances (Total Assets = Total Liabilities + Equity)
-   - Confirm that opening balances in ALL notes match the prior year closing balances
-   - Check that reconciliations for PPE, receivables, payables, equity, and borrowings are mathematically correct
-   - Ensure subtotals used in ratios or analysis agree to underlying line items
-   - Verify cash flow statement reconciles to cash movement in balance sheet
-
-CRITICAL: Your final response MUST be valid JSON only. No markdown, no explanation text outside the JSON.
-
-Output this exact JSON structure:
-{
-  "companyName": "COMPANY NAME FROM DOCUMENT",
-  "financialYearEnd": "DD Month YYYY",
-  "kpi": {
-    "testsPassed": number,
-    "testsFailed": number,
-    "totalTests": number,
-    "exceptionsFound": number,
-    "highSeverity": number,
-    "mediumSeverity": number,
-    "lowSeverity": number,
-    "passRate": number,
-    "horizontalChecks": "X/Y"
-  },
-  "conclusionSummary": "The financial statements cast correctly subject to X exceptions" or "The financial statements cast correctly with no exceptions",
-  "conclusionItems": [
-    {
-      "priority": "high" | "medium" | "low",
-      "note": "Note X or Location",
-      "description": "Concise description using symbols: Stated RM X vs Calculated RM Y → Diff RM Z"
-    }
-  ],
-  "conclusionNote": "Balance Sheet balances. Summary statement about overall accuracy.",
-  "verticalCasting": [
-    {
-      "section": "SOFP 2024 or SOCI 2024 or Note X",
-      "description": "What is being checked",
-      "components": [
-        {"name": "Line item name", "value": "RM X,XXX,XXX"}
-      ],
-      "calculated": "RM X,XXX,XXX",
-      "stated": "RM X,XXX,XXX",
-      "variance": "RM 0 or RM X,XXX",
-      "varianceAmount": 0,
-      "status": "pass" | "fail"
-    }
-  ],
-  "horizontalCasting": [
-    {
-      "account": "Account or Balance name",
-      "opening": "RM X,XXX,XXX",
-      "additions": [
-        {"description": "+ Description", "value": "RM X,XXX,XXX"}
-      ],
-      "deductions": [
-        {"description": "- Description", "value": "RM X,XXX,XXX"}
-      ],
-      "calculatedClosing": "RM X,XXX,XXX",
-      "statedClosing": "RM X,XXX,XXX",
-      "variance": "RM 0 or RM X,XXX",
-      "varianceAmount": 0,
-      "status": "pass" | "fail"
-    }
-  ],
-  "crossReferenceChecks": [
-    {
-      "noteRef": "Note 8",
-      "noteDescription": "Other Receivables",
-      "lineItem": "Other receivables (SOFP)",
-      "perNote": "RM X,XXX,XXX",
-      "perStatement": "RM X,XXX,XXX",
-      "variance": "RM 0 or RM X",
-      "varianceAmount": 0,
-      "status": "pass" | "fail"
-    }
-  ],
-  "exceptions": [
-    {
-      "id": 1,
-      "type": "Casting Error | Note vs Statement Mismatch | Conceptual Error | Presentation Error | Missing Disclosure | Requires Further Inquiry",
-      "location": "Note X or Statement location",
-      "description": "What is wrong",
-      "perStatement": "RM X,XXX,XXX or N/A",
-      "perCalculation": "RM X,XXX,XXX or N/A",
-      "difference": "RM X,XXX or N/A",
-      "severity": "high" | "medium" | "low",
-      "recommendation": "What should be done to fix it"
-    }
-  ]
-}
-
-Rules for COMPREHENSIVE checking:
-- Include ALL vertical casting checks performed (MINIMUM 30-50 checks for typical statements)
-- Check EVERY section: SOFP current assets, non-current assets, current liabilities, non-current liabilities, equity
-- Check EVERY section: SOCI revenue, cost of sales, operating expenses, finance costs, tax
-- Check ALL notes with numerical data: PPE, intangibles, investments, receivables, payables, borrowings, equity, revenue breakdown, expense breakdown
-- Include ALL horizontal casting checks (movement reconciliations for ALL major accounts with movements)
-- Include ALL cross-reference checks (MINIMUM 15-25 note-to-statement ties):
-  * Every note total MUST be checked against its corresponding SOFP/SOCI line item
-  * Check: PPE note total vs SOFP PPE, Inventories note vs SOFP Inventories, Trade receivables note vs SOFP, Other receivables note vs SOFP, Trade payables note vs SOFP, Other payables note vs SOFP, Borrowings note vs SOFP, Revenue note vs SOCI, etc.
-  * Flag ANY difference, even RM 1 difference, as this indicates a potential error
-- Flag even small rounding differences of RM 1 as low severity exceptions - these MUST be reported
-- Only include actual discrepancies in exceptions array
-- If no exceptions, return empty array: "exceptions": []
-- Use actual numbers from the document, formatted with RM and commas
-- varianceAmount should be the numeric value (positive number)
-- Pass rate is percentage rounded to nearest integer
-- Format all monetary values consistently as "RM X,XXX,XXX"
-- BE THOROUGH - it is better to check too much than too little
-
-CONCLUSION FORMAT RULES (be concise, use symbols):
-- Use symbols: → (leads to), = (equals), vs (versus), ≠ (not equal), Δ (difference)
-- Format: "Stated RM X vs Calculated RM Y → Δ RM Z" or "Note total RM X ≠ SOFP RM Y → Δ RM Z"
-- Keep descriptions SHORT - max 80 characters
-- Examples:
-  * "Stated RM 2,620,854 vs Sum RM 2,620,853 → Δ RM 1"
-  * "Note 15 Staff Cost RM 2,120,263 ≠ Schedule B RM 2,079,503 → Δ RM 40,760"
-  * "Components sum RM 11,344,437 = Stated RM 11,344,437 ✓"
-
-CRITICAL DATA CONSISTENCY RULES:
-- The conclusionItems MUST match the exceptions array - every item in conclusionItems must have a corresponding entry in exceptions with the SAME variance amount
-- If you report a variance in conclusionItems (e.g., "difference of RM 20,000"), the corresponding entry in verticalCasting, horizontalCasting, crossReferenceChecks, or exceptions MUST show that SAME variance amount (RM 20,000), NOT RM 0
-- status="fail" means there IS a variance - the variance field MUST show the actual difference, never RM 0
-- status="pass" means variance is zero - the variance field should be "RM 0"
-- NEVER mark an item as "fail" with variance "RM 0" - this is contradictory
-- NEVER mark an item as "pass" with a non-zero variance - this is contradictory
-- Double-check that ALL numbers in the detailed findings match what you describe in the conclusion`
+// ============================================================================
+// NEW ARCHITECTURE: Phase 1 (LLM Extract) → Phase 2 (Code Verify)
+// ============================================================================
+// - LLM only extracts data from PDF (what it's good at)
+// - Code performs ALL arithmetic verification (100% accurate)
+// - No more inconsistent LLM arithmetic errors
+// ============================================================================
 
 // Parse JSON from Gemini's response (handles potential markdown wrapping)
-function parseAuditJson(text: string): AuditDashboardData | null {
-  // Try to extract JSON from the response
+function parseExtractionJson(text: string): ExtractionResult | null {
   let jsonStr = text.trim()
 
   // Remove markdown code blocks if present
@@ -195,23 +38,42 @@ function parseAuditJson(text: string): AuditDashboardData | null {
   try {
     const parsed = JSON.parse(jsonStr)
 
-    // Add report date
-    const now = new Date()
-    const reportDate = now.toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    // Add extractedAt if not present
+    if (!parsed.extractedAt) {
+      parsed.extractedAt = new Date().toISOString()
+    }
 
-    return {
-      ...parsed,
-      reportDate,
-    } as AuditDashboardData
+    // Ensure arrays exist
+    parsed.statements = parsed.statements || []
+    parsed.movements = parsed.movements || []
+    parsed.crossReferences = parsed.crossReferences || []
+    parsed.castingRelationships = parsed.castingRelationships || []
+    parsed.warnings = parsed.warnings || []
+
+    return parsed as ExtractionResult
   } catch (e) {
-    console.error("Failed to parse audit JSON:", e)
+    console.error("Failed to parse extraction JSON:", e)
     return null
+  }
+}
+
+// Convert extraction + verification to legacy AuditDashboardData format
+function toLegacyFormat(extraction: ExtractionResult, verification: ReturnType<typeof runVerification>): AuditDashboardData {
+  const dashboardData = toAuditDashboardData(extraction, verification)
+
+  return {
+    companyName: dashboardData.companyName,
+    reportDate: dashboardData.reportDate,
+    financialYearEnd: dashboardData.financialYearEnd,
+    kpi: dashboardData.kpi,
+    conclusionSummary: dashboardData.conclusionSummary,
+    conclusionItems: dashboardData.conclusionItems,
+    conclusionNote: dashboardData.conclusionNote,
+    verticalCasting: dashboardData.verticalCasting,
+    horizontalCasting: dashboardData.horizontalCasting,
+    crossReferenceChecks: dashboardData.crossReferenceChecks,
+    exceptions: dashboardData.exceptions,
+    warnings: dashboardData.warnings,
   }
 }
 
@@ -235,7 +97,7 @@ export async function POST(request: NextRequest) {
     const { pdfBase64, outputFormat = "html" } = body
     fileName = body.fileName || "unknown"
 
-    log("=== REQUEST STARTED ===")
+    log("=== REQUEST STARTED (New Architecture: Extract → Verify) ===")
     log("File received", { fileName, base64Length: pdfBase64?.length || 0, outputFormat })
 
     const apiKey = process.env.GOOGLE_API_KEY
@@ -297,23 +159,22 @@ export async function POST(request: NextRequest) {
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       generationConfig: {
-        maxOutputTokens: 1000000, // 1M - no limit on output
-        temperature: 0.1,
+        maxOutputTokens: 1000000,
+        temperature: 0.1, // Low temperature for consistent extraction
       },
       safetySettings,
     })
 
-    log("=== GEMINI API REQUEST (Direct PDF Vision) ===")
+    log("=== PHASE 1: LLM EXTRACTION (No arithmetic) ===")
     log("Model", "gemini-2.5-flash")
-    log("Max tokens", 1000000)
-    log("PDF Size", `${pdfSizeKB} KB`)
+    log("Purpose", "Extract data only - verification done by code")
 
     const apiStartTime = Date.now()
 
     // Helper function to call API with retry on rate limit
     const callWithRetry = async (retryCount = 0): Promise<{ text: string; inputTokens: number; outputTokens: number }> => {
       try {
-        const prompt = `${AUDIT_PROMPT}\n\nAnalyze the financial statement document above and perform a comprehensive casting check. Return ONLY the JSON structure specified above.`
+        const prompt = `${EXTRACTION_PROMPT}\n\nExtract all financial data from this document. Remember: EXTRACT ONLY, do not verify or calculate anything.`
 
         // Send PDF directly to Gemini Vision
         const result = await model.generateContent([
@@ -334,9 +195,7 @@ export async function POST(request: NextRequest) {
         if (candidates && candidates.length > 0) {
           const candidate = candidates[0]
           log("Candidate finish reason", candidate.finishReason)
-          log("Candidate safety ratings", candidate.safetyRatings)
 
-          // Check if blocked
           if (candidate.finishReason === "SAFETY") {
             log("ERROR: Response blocked by safety filters")
             throw new Error("Response blocked by safety filters. The content may have triggered safety restrictions.")
@@ -348,13 +207,12 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Get text - handle potential empty response
+        // Get text
         let text = ""
         try {
           text = response.text()
         } catch (textError) {
           log("ERROR: Failed to get response text", textError)
-          // Try to get text from candidates directly
           if (candidates && candidates[0]?.content?.parts) {
             text = candidates[0].content.parts
               .filter((part: { text?: string }) => part.text)
@@ -363,13 +221,8 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        log("Response text length", text.length)
-        if (text.length === 0) {
-          log("WARNING: Empty response from Gemini")
-          log("Full response object", JSON.stringify(response, null, 2))
-        }
+        log("Extraction response length", text.length)
 
-        // Get token counts from usage metadata
         const usageMetadata = response.usageMetadata
         const inputTokens = usageMetadata?.promptTokenCount || 0
         const outputTokens = usageMetadata?.candidatesTokenCount || 0
@@ -378,7 +231,7 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
         if ((errorMessage.includes("429") || errorMessage.includes("rate") || errorMessage.includes("quota")) && retryCount < 3) {
-          const waitTime = Math.pow(2, retryCount) * 30000 // 30s, 60s, 120s
+          const waitTime = Math.pow(2, retryCount) * 30000
           log(`Rate limit hit, waiting ${waitTime / 1000}s before retry ${retryCount + 1}/3`)
           await new Promise(resolve => setTimeout(resolve, waitTime))
           return callWithRetry(retryCount + 1)
@@ -387,19 +240,61 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    log("=== CALLING GEMINI API (Direct PDF Vision) ===")
-    const { text: finalAnalysis, inputTokens: totalInputTokens, outputTokens: totalOutputTokens } = await callWithRetry()
+    const { text: extractionText, inputTokens: totalInputTokens, outputTokens: totalOutputTokens } = await callWithRetry()
 
-    const apiDuration = Date.now() - apiStartTime
+    const extractionDuration = Date.now() - apiStartTime
+    log("Extraction completed", { durationMs: extractionDuration })
 
-    log("=== GEMINI API RESPONSE SUMMARY ===")
-    log("API call duration", { durationMs: apiDuration, durationSec: (apiDuration / 1000).toFixed(2) })
-    log("Token usage", {
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-      totalTokens: totalInputTokens + totalOutputTokens,
+    // Parse extraction result
+    const extraction = parseExtractionJson(extractionText)
+
+    if (!extraction) {
+      log("ERROR: Failed to parse extraction result")
+      return NextResponse.json({
+        error: "Failed to parse extraction result from LLM",
+        rawResponse: extractionText.substring(0, 1000),
+        debug: { requestId, logs, durationMs: Date.now() - startTime }
+      }, { status: 500 })
+    }
+
+    log("Extraction parsed successfully", {
+      companyName: extraction.companyName,
+      statements: extraction.statements.length,
+      movements: extraction.movements.length,
+      crossReferences: extraction.crossReferences.length,
+      castingRelationships: extraction.castingRelationships.length,
+      warnings: extraction.warnings.length,
+      confidence: extraction.overallConfidence,
     })
-    log("Stop reason", "completed")
+
+    // =========================================================================
+    // PHASE 2: CODE-BASED VERIFICATION (100% Accurate Arithmetic)
+    // =========================================================================
+    log("=== PHASE 2: CODE VERIFICATION (Deterministic arithmetic) ===")
+
+    const verificationStartTime = Date.now()
+    const verification = runVerification(extraction)
+    const verificationDuration = Date.now() - verificationStartTime
+
+    log("Verification completed", {
+      durationMs: verificationDuration,
+      totalChecks: verification.kpi.totalChecks,
+      passed: verification.kpi.passed,
+      failed: verification.kpi.failed,
+      exceptionsFound: verification.kpi.exceptionsCount,
+      passRate: verification.kpi.passRate,
+    })
+
+    // Convert to dashboard format
+    const auditData = toLegacyFormat(extraction, verification)
+
+    // Generate HTML dashboard
+    const htmlDashboard = generateDashboardHtml(auditData)
+    log("Dashboard generated", { htmlLength: htmlDashboard.length })
+
+    // Calculate total duration
+    const totalDuration = Date.now() - startTime
+    const apiDuration = extractionDuration
 
     // Calculate costs
     const modelUsed = "gemini-2.5-flash"
@@ -410,35 +305,13 @@ export async function POST(request: NextRequest) {
     const fileSizeBytes = Math.round((cleanBase64.length * 3) / 4)
     const fileSizeMB = Math.round((fileSizeBytes / (1024 * 1024)) * 100) / 100
 
-    // Parse the JSON response and generate HTML dashboard
-    const auditData = parseAuditJson(finalAnalysis)
-    let htmlDashboard = ""
-    let discrepanciesFound = 0
-
-    if (auditData) {
-      htmlDashboard = generateDashboardHtml(auditData)
-      discrepanciesFound = auditData.kpi.exceptionsFound
-      log("Dashboard generated successfully", {
-        testsPassed: auditData.kpi.testsPassed,
-        testsFailed: auditData.kpi.testsFailed,
-        exceptionsFound: auditData.kpi.exceptionsFound,
-      })
-    } else {
-      log("WARNING: Could not parse audit JSON, returning raw analysis")
-      // Count discrepancies from raw text as fallback
-      const criticalCount = (finalAnalysis.match(/\[CRITICAL\]/gi) || []).length
-      const moderateCount = (finalAnalysis.match(/\[MODERATE\]/gi) || []).length
-      const minorCount = (finalAnalysis.match(/\[MINOR\]/gi) || []).length
-      discrepanciesFound = criticalCount + moderateCount + minorCount
-    }
-
     // Save job analytics to Supabase
     const jobAnalytics: JobAnalytics = {
       request_id: requestId,
       file_name: fileName,
       file_size_bytes: fileSizeBytes,
       file_size_mb: fileSizeMB,
-      pdf_pages: undefined, // Page count not available with direct PDF vision
+      pdf_pages: undefined,
       model: modelUsed,
       input_tokens: totalInputTokens,
       output_tokens: totalOutputTokens,
@@ -448,27 +321,43 @@ export async function POST(request: NextRequest) {
       total_cost_usd: costs.totalCost,
       tools_configured: false,
       tools_called: 0,
-      tool_usage_summary: {},
+      tool_usage_summary: {
+        extraction_confidence: extraction.overallConfidence,
+        verification_method: 'deterministic_code',
+      },
       iterations: 1,
       api_duration_ms: apiDuration,
-      total_duration_ms: Date.now() - startTime,
+      total_duration_ms: totalDuration,
       stop_reason: "completed",
-      analysis_length_chars: finalAnalysis.length,
-      analysis_length_words: finalAnalysis.split(/\s+/).length,
-      discrepancies_found: discrepanciesFound,
+      analysis_length_chars: extractionText.length,
+      analysis_length_words: extractionText.split(/\s+/).length,
+      discrepancies_found: verification.kpi.exceptionsCount,
       status: "success",
     }
 
     const saveResult = await saveJobAnalytics(jobAnalytics)
     log("Supabase save result", saveResult)
-    log("HTML dashboard length", { htmlLength: htmlDashboard.length })
+
     log("=== REQUEST COMPLETED ===")
+    log("Summary", {
+      architecture: "Extract (LLM) → Verify (Code)",
+      extractionDurationMs: extractionDuration,
+      verificationDurationMs: verificationDuration,
+      totalDurationMs: totalDuration,
+      checksPerformed: verification.kpi.totalChecks,
+      accuracy: "100% (deterministic code verification)",
+    })
 
     // Return response based on output format
     if (outputFormat === "json") {
       return NextResponse.json({
         data: auditData,
-        rawAnalysis: finalAnalysis,
+        extraction: extraction,
+        verification: {
+          kpi: verification.kpi,
+          method: verification.verificationMethod,
+          exceptionsCount: verification.kpi.exceptionsCount,
+        },
         model: modelUsed,
         usage: {
           input_tokens: totalInputTokens,
@@ -481,8 +370,10 @@ export async function POST(request: NextRequest) {
         },
         debug: {
           requestId,
-          totalDurationMs: Date.now() - startTime,
-          apiDurationMs: apiDuration,
+          architecture: "extract_then_verify",
+          extractionDurationMs: extractionDuration,
+          verificationDurationMs: verificationDuration,
+          totalDurationMs: totalDuration,
           fileSizeBytes,
           fileSizeMB,
           stopReason: "completed",
@@ -493,8 +384,13 @@ export async function POST(request: NextRequest) {
 
     // Default: return HTML dashboard
     return NextResponse.json({
-      html: htmlDashboard || `<html><body><h1>Analysis Complete</h1><pre>${finalAnalysis}</pre></body></html>`,
+      html: htmlDashboard,
       data: auditData,
+      verification: {
+        method: verification.verificationMethod,
+        totalChecks: verification.kpi.totalChecks,
+        passRate: verification.kpi.passRate,
+      },
       model: modelUsed,
       usage: {
         input_tokens: totalInputTokens,
@@ -507,12 +403,14 @@ export async function POST(request: NextRequest) {
       },
       debug: {
         requestId,
-        totalDurationMs: Date.now() - startTime,
-        apiDurationMs: apiDuration,
+        architecture: "extract_then_verify",
+        extractionDurationMs: extractionDuration,
+        verificationDurationMs: verificationDuration,
+        totalDurationMs: totalDuration,
         fileSizeBytes,
         fileSizeMB,
         stopReason: "completed",
-        discrepanciesFound,
+        discrepanciesFound: verification.kpi.exceptionsCount,
         analyticsSaved: saveResult.success,
       },
     })

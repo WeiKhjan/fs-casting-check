@@ -235,22 +235,78 @@ export function verifyAllMovements(
 
 /**
  * Verify that note total matches statement line item
+ * Handles sign conventions for expenses (note positive, statement negative)
  */
 export function verifyCrossReference(
   crossRef: ExtractedCrossReference
 ): CrossReferenceVerificationResult {
-  const variance = calculateVariance(crossRef.noteTotal, crossRef.statementAmount)
-  const status = determineStatus(variance)
+  const noteAmount = crossRef.noteTotal
+  const statementAmount = crossRef.statementAmount
+
+  // Calculate raw variance (may be large due to sign difference)
+  const rawVariance = calculateVariance(noteAmount, statementAmount)
+
+  // Calculate absolute variance (ignoring signs)
+  const absoluteVariance = calculateVariance(Math.abs(noteAmount), Math.abs(statementAmount))
+
+  // Check if this is a sign difference only (expense convention)
+  // Signs differ if one is positive and one is negative, but absolute values are close
+  const signsAreDifferent = (noteAmount >= 0 && statementAmount < 0) || (noteAmount < 0 && statementAmount >= 0)
+  const isSignDifferenceOnly = signsAreDifferent && absoluteVariance === 0
+  const isSignDifferenceWithSmallVariance = signsAreDifferent && absoluteVariance > 0 && absoluteVariance < Math.abs(noteAmount) * 0.01 // < 1% difference
+
+  // Determine if this might be a wrong mapping (large variance, low confidence, or component_to_total)
+  const variancePercentage = Math.abs(noteAmount) > 0 ? (rawVariance / Math.abs(noteAmount)) * 100 : 0
+  const isPossibleWrongMapping =
+    crossRef.mappingType === 'component_to_total' ||
+    crossRef.mappingType === 'uncertain' ||
+    (crossRef.mappingConfidence !== undefined && crossRef.mappingConfidence < 70) ||
+    (variancePercentage > 50 && !isSignDifferenceOnly) // More than 50% variance and not just a sign issue
+
+  // Determine final status
+  let status: VerificationStatus
+  let signExplanation: string | undefined
+
+  if (absoluteVariance === 0) {
+    // Amounts match (either same sign or sign difference only)
+    if (isSignDifferenceOnly && crossRef.isExpenseOrDeduction) {
+      status = 'pass'
+      signExplanation = 'Sign difference due to expense presentation convention (note shows positive, statement shows as outflow/negative)'
+    } else if (isSignDifferenceOnly) {
+      status = 'warning' // Sign differs but not flagged as expense - might need review
+      signExplanation = 'Amounts match but signs differ - verify if this is an expense/deduction item'
+    } else {
+      status = 'pass'
+    }
+  } else if (isSignDifferenceWithSmallVariance && crossRef.isExpenseOrDeduction) {
+    // Small rounding difference on an expense item
+    status = absoluteVariance <= 1 ? 'pass' : 'warning'
+    signExplanation = 'Expense item with minor rounding difference'
+  } else if (isPossibleWrongMapping) {
+    status = 'needs_review'
+    signExplanation = `Possible wrong mapping: ${crossRef.mappingType || 'unknown type'}, confidence: ${crossRef.mappingConfidence || 'not specified'}%`
+  } else {
+    status = 'fail'
+  }
+
+  // Use absolute variance for reporting if it's a sign difference issue
+  const reportedVariance = isSignDifferenceOnly ? absoluteVariance : rawVariance
 
   return {
     id: generateId('xref'),
     checkType: 'cross_reference',
     noteRef: crossRef.noteRef,
     noteDescription: crossRef.noteDescription,
-    noteAmount: crossRef.noteTotal,
-    statementAmount: crossRef.statementAmount,
-    variance,
+    noteAmount: noteAmount,
+    statementAmount: statementAmount,
+    variance: reportedVariance,
     status,
+    isSignDifferenceOnly,
+    absoluteVariance,
+    signExplanation,
+    mappingConfidence: crossRef.mappingConfidence,
+    mappingType: crossRef.mappingType,
+    isPossibleWrongMapping,
     verifiedBy: 'code',
     timestamp: new Date().toISOString(),
   }
@@ -347,16 +403,48 @@ function crossRefToException(
 ): VerificationException | null {
   if (result.status === 'pass') return null
 
+  // Determine exception type and recommendation based on the issue
+  let exceptionType: VerificationException['type'] = 'Cross Reference Mismatch'
+  let description = `${result.noteDescription}: Note shows ${formatRM(result.noteAmount)} but statement shows ${formatRM(result.statementAmount)}`
+  let recommendation = 'Verify that the note total agrees with the statement line item. May be a presentation or disclosure error.'
+  let severity = determineSeverity(result.variance)
+
+  // Handle sign difference cases
+  if (result.isSignDifferenceOnly) {
+    description = `${result.noteDescription}: Sign convention difference - Note shows ${formatRM(result.noteAmount)}, Statement shows ${formatRM(result.statementAmount)} (absolute values match)`
+    recommendation = result.signExplanation || 'Sign difference due to expense/deduction presentation convention. Amounts match when comparing absolute values.'
+    severity = 'low' // Sign differences are informational, not errors
+  }
+
+  // Handle possible wrong mapping
+  if (result.isPossibleWrongMapping) {
+    exceptionType = 'Requires Human Review'
+    description = `${result.noteDescription}: Possible incorrect mapping - ${result.signExplanation || 'Large variance suggests this may not be the correct cross-reference'}`
+    recommendation = `Review mapping: Note ${result.noteRef} may not correspond to the statement line item. Check if a component was mapped to a total, or if labels were mismatched. Mapping confidence: ${result.mappingConfidence || 'unknown'}%, Type: ${result.mappingType || 'unknown'}`
+    severity = 'medium' // Needs human review but may not be an actual error
+  }
+
+  // Handle warning status (sign differs but not flagged as expense)
+  if (result.status === 'warning' && result.isSignDifferenceOnly) {
+    severity = 'low'
+    recommendation = 'Amounts match but signs differ. Verify if this is an expense/deduction item that should show as negative on the statement.'
+  }
+
+  // Handle needs_review status
+  if (result.status === 'needs_review') {
+    severity = 'medium'
+  }
+
   return {
     id: exceptionId,
-    type: 'Cross Reference Mismatch',
+    type: exceptionType,
     location: result.noteRef,
-    description: `${result.noteDescription}: Note shows ${formatRM(result.noteAmount)} but statement shows ${formatRM(result.statementAmount)}`,
+    description,
     statedAmount: result.statementAmount,
     calculatedAmount: result.noteAmount,
     difference: result.variance,
-    severity: determineSeverity(result.variance),
-    recommendation: 'Verify that the note total agrees with the statement line item. May be a presentation or disclosure error.',
+    severity,
+    recommendation,
     relatedCheckId: result.id,
   }
 }

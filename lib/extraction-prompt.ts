@@ -313,7 +313,12 @@ Return ONLY this JSON structure (no markdown):
     "statementAmount": number,
     "statementType": "SOFP|SOCI",
     "pageNumberNote": number,
-    "pageNumberStatement": number
+    "pageNumberStatement": number,
+    "isExpenseOrDeduction": boolean,
+    "signConventionNote": "positive|negative",
+    "signConventionStatement": "positive|negative",
+    "mappingConfidence": 0-100,
+    "mappingType": "total_to_total|component_to_component|component_to_total|uncertain"
   }],
 
   "castingRelationships": [{
@@ -334,6 +339,34 @@ Return ONLY this JSON structure (no markdown):
     "pageNumber": number
   }]
 }
+
+CROSS-REFERENCE MAPPING RULES (CRITICAL):
+
+1. ONLY map TOTALS to TOTALS:
+   - Note total → Statement line item total
+   - Do NOT map a component/sub-item in a note to a statement total
+   - Example CORRECT: Note 14 "Total Revenue" (RM 134,596,184) → SOCI "Revenue" (RM 134,596,184)
+   - Example WRONG: Note 15 "Finance lease interest" (RM 1,739) → SOCI "Finance costs" (RM 50,008)
+     (Finance lease interest is just ONE component of Finance costs)
+
+2. SIGN CONVENTIONS for expenses/costs:
+   - In NOTES: expenses are usually shown as POSITIVE numbers (e.g., "Cost of sales: RM 122,807,653")
+   - In STATEMENTS: expenses are shown in BRACKETS meaning negative (e.g., "(RM 122,807,653)")
+   - Set isExpenseOrDeduction=true for: Cost of sales, expenses, tax expense, finance costs, depreciation, etc.
+   - Set signConventionNote="positive" if note shows without brackets
+   - Set signConventionStatement="negative" if statement shows in brackets
+
+3. MAPPING CONFIDENCE:
+   - 95-100: Exact label match, same amount, clearly the same item
+   - 80-94: Similar labels, amounts match, high confidence
+   - 60-79: Labels differ slightly, amounts match, moderate confidence
+   - Below 60: Uncertain mapping, amounts may not match, flag as "uncertain"
+
+4. MAPPING TYPE:
+   - "total_to_total": Note total maps to statement total (PREFERRED)
+   - "component_to_component": Both are sub-items (acceptable)
+   - "component_to_total": Note shows component but mapped to statement total (AVOID - usually wrong)
+   - "uncertain": Not sure about the mapping
 
 BE THOROUGH:
 - Extract EVERY section of every statement

@@ -98,12 +98,21 @@ export interface ExtractedMovement {
 export interface ExtractedCrossReference {
   noteRef: string                  // e.g., "Note 8"
   noteDescription: string          // e.g., "Other Receivables"
-  noteTotal: number                // Total per the note
+  noteTotal: number                // Total per the note (always positive as shown in note)
   statementLineItem: string        // Corresponding line item label in SOFP/SOCI
-  statementAmount: number          // Amount per the statement
+  statementAmount: number          // Amount per the statement (negative if in brackets)
   statementType: StatementType     // Which statement this relates to
   pageNumberNote?: number
   pageNumberStatement?: number
+
+  // Sign convention handling for expenses
+  isExpenseOrDeduction?: boolean   // True if this is an expense/cost/deduction item
+  signConventionNote?: 'positive' | 'negative'      // How the note presents it
+  signConventionStatement?: 'positive' | 'negative' // How the statement presents it (brackets = negative)
+
+  // Mapping confidence
+  mappingConfidence?: number       // 0-100: How confident LLM is this is the right mapping
+  mappingType?: 'total_to_total' | 'component_to_component' | 'component_to_total' | 'uncertain'
 }
 
 /**
@@ -247,6 +256,16 @@ export interface CrossReferenceVerificationResult {
 
   variance: number
   status: VerificationStatus
+
+  // Sign-aware comparison results
+  isSignDifferenceOnly?: boolean     // True if amounts match but signs differ (expense convention)
+  absoluteVariance?: number          // Variance when comparing absolute values
+  signExplanation?: string           // Explanation of why signs differ
+
+  // Mapping quality indicators
+  mappingConfidence?: number         // From LLM extraction
+  mappingType?: string               // From LLM extraction
+  isPossibleWrongMapping?: boolean   // True if variance suggests wrong mapping
 
   verifiedBy: 'code'
   timestamp: string

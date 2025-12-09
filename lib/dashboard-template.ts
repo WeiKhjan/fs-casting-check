@@ -164,7 +164,7 @@ export function generateDashboardHtml(data: AuditDashboardData): string {
             <td>${escapeHtml(w.location)}</td>
             <td>${escapeHtml(w.description)}</td>
             <td class="number">${w.confidence}%</td>
-            <td class="number">${w.suggestedValue !== undefined ? `RM ${w.suggestedValue.toLocaleString()}` : '-'}</td>
+            <td class="number">${w.suggestedValue != null ? `RM ${w.suggestedValue.toLocaleString()}` : '-'}</td>
             <td>${w.pageNumber || '-'}</td>
         </tr>`).join("\n")
 

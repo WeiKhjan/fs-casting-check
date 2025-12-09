@@ -14,8 +14,8 @@ import EXTRACTION_PROMPT from "@/lib/extraction-prompt"
 // - No more inconsistent LLM arithmetic errors
 // ============================================================================
 
-// Parse JSON from Gemini's response (handles potential markdown wrapping)
-function parseExtractionJson(text: string): ExtractionResult | null {
+// Parse JSON from Gemini's response (handles potential markdown wrapping and truncation)
+function parseExtractionJson(text: string, wasTruncated: boolean = false): ExtractionResult | null {
   let jsonStr = text.trim()
 
   // Remove markdown code blocks if present
@@ -35,6 +35,11 @@ function parseExtractionJson(text: string): ExtractionResult | null {
     jsonStr = jsonMatch[0]
   }
 
+  // If truncated, try to repair the JSON
+  if (wasTruncated) {
+    jsonStr = repairTruncatedJson(jsonStr)
+  }
+
   try {
     const parsed = JSON.parse(jsonStr)
 
@@ -50,11 +55,76 @@ function parseExtractionJson(text: string): ExtractionResult | null {
     parsed.castingRelationships = parsed.castingRelationships || []
     parsed.warnings = parsed.warnings || []
 
+    // If truncated, add a warning
+    if (wasTruncated) {
+      parsed.warnings.push({
+        type: 'MISSING_DATA',
+        location: 'Entire document',
+        description: 'Response was truncated due to length limits. Some data may be missing.',
+        confidence: 50,
+        pageNumber: 0
+      })
+    }
+
     return parsed as ExtractionResult
   } catch (e) {
     console.error("Failed to parse extraction JSON:", e)
     return null
   }
+}
+
+// Attempt to repair truncated JSON by closing open brackets/braces
+function repairTruncatedJson(jsonStr: string): string {
+  let repaired = jsonStr.trim()
+
+  // Remove any trailing incomplete tokens (partial strings, numbers, etc.)
+  // Look for the last complete value
+  const lastCompletePattern = /,\s*"[^"]*$|,\s*\d+$|,\s*$|:\s*"[^"]*$|:\s*\d+$|:\s*$/
+  repaired = repaired.replace(lastCompletePattern, '')
+
+  // Count open brackets and braces
+  let openBraces = 0
+  let openBrackets = 0
+  let inString = false
+  let escape = false
+
+  for (const char of repaired) {
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (char === '\\') {
+      escape = true
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+
+    if (char === '{') openBraces++
+    else if (char === '}') openBraces--
+    else if (char === '[') openBrackets++
+    else if (char === ']') openBrackets--
+  }
+
+  // If we're in a string, close it
+  if (inString) {
+    repaired += '"'
+  }
+
+  // Close any open brackets first, then braces
+  while (openBrackets > 0) {
+    repaired += ']'
+    openBrackets--
+  }
+  while (openBraces > 0) {
+    repaired += '}'
+    openBraces--
+  }
+
+  return repaired
 }
 
 // Convert extraction + verification to legacy AuditDashboardData format
@@ -172,9 +242,9 @@ export async function POST(request: NextRequest) {
     const apiStartTime = Date.now()
 
     // Helper function to call API with retry on rate limit
-    const callWithRetry = async (retryCount = 0): Promise<{ text: string; inputTokens: number; outputTokens: number }> => {
+    const callWithRetry = async (retryCount = 0): Promise<{ text: string; inputTokens: number; outputTokens: number; wasTruncated: boolean }> => {
       try {
-        const prompt = `${EXTRACTION_PROMPT}\n\nExtract all financial data from this document. Remember: EXTRACT ONLY, do not verify or calculate anything.`
+        const prompt = `${EXTRACTION_PROMPT}\n\nExtract all financial data from this document. Remember: EXTRACT ONLY, do not verify or calculate anything.\n\nIMPORTANT: Be CONCISE. Only include key totals and subtotals. Skip minor line items that don't affect totals.`
 
         // Send PDF directly to Gemini Vision
         const result = await model.generateContent([
@@ -192,6 +262,7 @@ export async function POST(request: NextRequest) {
         const candidates = response.candidates
         log("Response candidates count", candidates?.length || 0)
 
+        let wasTruncated = false
         if (candidates && candidates.length > 0) {
           const candidate = candidates[0]
           log("Candidate finish reason", candidate.finishReason)
@@ -204,6 +275,11 @@ export async function POST(request: NextRequest) {
           if (candidate.finishReason === "RECITATION") {
             log("ERROR: Response blocked due to recitation")
             throw new Error("Response blocked due to recitation policy.")
+          }
+
+          if (candidate.finishReason === "MAX_TOKENS") {
+            log("WARNING: Response truncated due to MAX_TOKENS - will attempt to repair JSON")
+            wasTruncated = true
           }
         }
 
@@ -227,7 +303,7 @@ export async function POST(request: NextRequest) {
         const inputTokens = usageMetadata?.promptTokenCount || 0
         const outputTokens = usageMetadata?.candidatesTokenCount || 0
 
-        return { text, inputTokens, outputTokens }
+        return { text, inputTokens, outputTokens, wasTruncated }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
         if ((errorMessage.includes("429") || errorMessage.includes("rate") || errorMessage.includes("quota")) && retryCount < 3) {
@@ -240,13 +316,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { text: extractionText, inputTokens: totalInputTokens, outputTokens: totalOutputTokens } = await callWithRetry()
+    const { text: extractionText, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, wasTruncated } = await callWithRetry()
 
     const extractionDuration = Date.now() - apiStartTime
-    log("Extraction completed", { durationMs: extractionDuration })
+    log("Extraction completed", { durationMs: extractionDuration, wasTruncated })
 
-    // Parse extraction result
-    const extraction = parseExtractionJson(extractionText)
+    // Parse extraction result (with truncation repair if needed)
+    const extraction = parseExtractionJson(extractionText, wasTruncated)
 
     if (!extraction) {
       log("ERROR: Failed to parse extraction result")

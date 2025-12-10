@@ -287,6 +287,9 @@ export default function FinancialStatementChecker() {
                         <Upload className="w-12 h-12 text-muted-foreground mb-3" />
                         <p className="text-sm font-medium">Drop your PDF here</p>
                         <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
+                        <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-2">
+                          Max file size: {MAX_FILE_SIZE_MB}MB
+                        </p>
                       </>
                     )}
                   </div>

@@ -91,16 +91,58 @@ function parseExtractionJson(text: string, wasTruncated: boolean = false): Extra
 function repairTruncatedJson(jsonStr: string): string {
   let repaired = jsonStr.trim()
 
-  // Remove any trailing incomplete tokens (partial strings, numbers, etc.)
-  // Look for the last complete value
-  const lastCompletePattern = /,\s*"[^"]*$|,\s*\d+$|,\s*$|:\s*"[^"]*$|:\s*\d+$|:\s*$/
-  repaired = repaired.replace(lastCompletePattern, '')
+  // First, find the last complete JSON structure by working backwards
+  // We need to find the last valid point where we can close the JSON
 
-  // Count open brackets and braces
-  let openBraces = 0
-  let openBrackets = 0
+  // Check if we're in an incomplete string (odd number of unescaped quotes)
   let inString = false
   let escape = false
+  let lastSafeIndex = 0
+
+  for (let i = 0; i < repaired.length; i++) {
+    const char = repaired[i]
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (char === '\\') {
+      escape = true
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      if (!inString) {
+        // Just closed a string, this is a safe point
+        lastSafeIndex = i + 1
+      }
+    }
+    // Track other safe points (after complete values)
+    if (!inString && (char === ',' || char === ']' || char === '}' || char === ':')) {
+      lastSafeIndex = i + 1
+    }
+  }
+
+  // If we ended mid-string, truncate to last safe point
+  if (inString && lastSafeIndex > 0) {
+    repaired = repaired.substring(0, lastSafeIndex)
+  }
+
+  // Remove trailing incomplete tokens more aggressively
+  // Handle cases like: `"key": ` or `"key": "partial` or `, "key` or `: 123` (incomplete number at end)
+  repaired = repaired
+    .replace(/,\s*"[^"]*"?\s*:\s*"[^"]*$/, '')  // incomplete key-value with string value
+    .replace(/,\s*"[^"]*"?\s*:\s*-?\d*\.?\d*$/, '')  // incomplete key-value with number value
+    .replace(/,\s*"[^"]*"?\s*:\s*$/, '')  // key with colon but no value
+    .replace(/,\s*"[^"]*$/, '')  // incomplete key
+    .replace(/,\s*$/, '')  // trailing comma
+    .replace(/:\s*"[^"]*$/, ': ""')  // incomplete string value - close it
+    .replace(/:\s*$/, ': null')  // missing value after colon
+
+  // Re-count open brackets and braces after cleanup
+  let openBraces = 0
+  let openBrackets = 0
+  inString = false
+  escape = false
 
   for (const char of repaired) {
     if (escape) {
@@ -123,7 +165,7 @@ function repairTruncatedJson(jsonStr: string): string {
     else if (char === ']') openBrackets--
   }
 
-  // If we're in a string, close it
+  // If still in a string after cleanup, close it
   if (inString) {
     repaired += '"'
   }
@@ -243,8 +285,13 @@ export async function POST(request: NextRequest) {
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       generationConfig: {
-        maxOutputTokens: 1000000,
+        maxOutputTokens: 65536, // Max output tokens for actual response
         temperature: 0.1, // Low temperature for consistent extraction
+        // Disable thinking to maximize output tokens for extraction
+        // @ts-expect-error - thinkingConfig is a valid Gemini 2.5 option but not in types yet
+        thinkingConfig: {
+          thinkingBudget: 0, // Disable thinking to get more output tokens
+        },
       },
       safetySettings,
     })

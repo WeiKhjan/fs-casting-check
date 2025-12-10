@@ -68,6 +68,7 @@ interface ColumnAwareExtractionResult {
 
   // Movement reconciliations
   movements: Array<{
+    column?: string // e.g., "group_current", "company_current"
     accountName: string
     noteRef?: string
     opening: number
@@ -222,6 +223,7 @@ Return ONLY this JSON structure (no markdown):
 
   "movements": [
     {
+      "column": "group_current",
       "accountName": "Property, Plant and Equipment",
       "noteRef": "Note 5",
       "opening": 35000,
@@ -255,7 +257,18 @@ CROSS-REFERENCE RULES:
 - For PPE notes: match the "Net Book Value" or closing balance to the statement amount
 - For notes with Current/Non-current splits: create SEPARATE cross-references for each
 - noteTotal = the amount shown in the NOTE that should match the statement
-- statementAmount = the amount shown on SOFP/SOCI for that line item`
+- statementAmount = the amount shown on SOFP/SOCI for that line item
+- For SOCI expense cross-references (e.g., Finance costs): match the TOTAL shown on SOCI to the note's TOTAL (sum of all components like term loan interest + hire purchase interest + loan interest), NOT individual sub-components
+
+MOVEMENT RECONCILIATION RULES:
+- Each movement must specify which column it applies to (group_current, company_current, etc.)
+- "opening" = the BEGINNING balance (At 1 May or start of year) - this is the PRIOR year closing balance
+- "statedClosing" = the END balance (At 30 April or end of year) - this is CURRENT year balance
+- For PPE: Opening balance is typically the LARGER number (before depreciation), closing is SMALLER
+- Check the note header to identify which year's movement table you're extracting
+- Group and Company may have DIFFERENT opening balances - extract separately
+- Additions are positive amounts added during the year
+- Deductions include depreciation, disposals, write-offs (all positive numbers, system treats as subtractions)`
 
 // ============================================================================
 // MAIN EXTRACTION FUNCTION
@@ -422,9 +435,9 @@ function convertToStandardFormat(extraction: ColumnAwareExtractionResult): Extra
     isExpenseOrDeduction: cr.isExpenseOrDeduction,
   }))
 
-  // Convert movements
+  // Convert movements - include column in account name for clarity
   const movements: ExtractedMovement[] = extraction.movements.map(m => ({
-    accountName: m.accountName,
+    accountName: m.column ? `${m.accountName} (${m.column})` : m.accountName,
     noteRef: m.noteRef,
     opening: m.opening,
     additions: m.additions,

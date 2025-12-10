@@ -78,7 +78,7 @@ export async function extractWithToolCalling(
   let totalOutputTokens = 0
   let toolCallsCount = 0
   let iterations = 0
-  const maxIterations = 20 // Safety limit
+  const maxIterations = 50 // Increased safety limit for thorough extraction
 
   // Start chat with PDF and prompt
   const chat = model.startChat({
@@ -102,7 +102,21 @@ export async function extractWithToolCalling(
 
   // Loop until model stops calling tools or we hit limit
   let continueLoop = true
-  let lastResponse = await chat.sendMessage("Begin extraction. Start by identifying the column structure.")
+  let lastResponse = await chat.sendMessage(`Begin extraction now.
+
+IMPORTANT: You must extract ALL casting relationships for the SOFP (Statement of Financial Position).
+
+For the GROUP_CURRENT column, extract these 7 essential castings:
+1. Non-Current Assets components → TOTAL NON-CURRENT ASSETS
+2. Current Assets components → TOTAL CURRENT ASSETS
+3. Total Non-Current Assets + Total Current Assets → TOTAL ASSETS
+4. Non-Current Liabilities components → TOTAL NON-CURRENT LIABILITIES
+5. Current Liabilities components → TOTAL CURRENT LIABILITIES
+6. Total Non-Current Liabilities + Total Current Liabilities → TOTAL LIABILITIES
+7. Equity components → TOTAL EQUITY
+
+Start by calling identify_columns, then extract_metadata, then extract_balance_sheet_totals, then ALL the castings above.
+Finally, call extraction_complete when done.`)
 
   while (continueLoop && iterations < maxIterations) {
     iterations++
@@ -147,7 +161,7 @@ export async function extractWithToolCalling(
             functionResponses.push({
               functionResponse: {
                 name,
-                response: { success: true, message: "Column structure identified. Now extract metadata." },
+                response: { success: true, message: "Column structure identified. Now call extract_metadata." },
               },
             })
             break
@@ -157,29 +171,42 @@ export async function extractWithToolCalling(
             functionResponses.push({
               functionResponse: {
                 name,
-                response: { success: true, message: "Metadata extracted. Now extract balance sheet totals for each column." },
+                response: { success: true, message: "Metadata extracted. Now call extract_balance_sheet_totals for group_current column." },
               },
             })
             break
 
           case "extract_balance_sheet_totals":
             toolCallResult.balanceSheetTotals.push(args as unknown as ExtractedBalanceSheetTotals)
-            functionResponses.push({
-              functionResponse: {
-                name,
-                response: { success: true, message: `Balance sheet totals for ${(args as { columnSource: string }).columnSource} recorded. Continue with other columns or proceed to casting relationships.` },
-              },
-            })
+            {
+              const bsCount = toolCallResult.balanceSheetTotals.length
+              const nextStep = bsCount < 4
+                ? "Continue with extract_balance_sheet_totals for remaining columns, or proceed to extract_casting for SOFP sections."
+                : "Now call extract_casting for each SOFP section (Non-Current Assets, Current Assets, Total Assets, Non-Current Liabilities, Current Liabilities, Total Liabilities, Equity) using group_current column."
+              functionResponses.push({
+                functionResponse: {
+                  name,
+                  response: { success: true, message: `Balance sheet totals for ${(args as { columnSource: string }).columnSource} recorded (${bsCount} total). ${nextStep}` },
+                },
+              })
+            }
             break
 
           case "extract_casting":
             toolCallResult.castings.push(args as unknown as ExtractedCastingWithColumn)
-            functionResponses.push({
-              functionResponse: {
-                name,
-                response: { success: true, message: `Casting for ${(args as { section: string }).section} (${(args as { columnSource: string }).columnSource}) recorded. Continue extracting more castings.` },
-              },
-            })
+            {
+              const castCount = toolCallResult.castings.filter(c => c.columnSource === 'group_current').length
+              const sections = ['Non-Current Assets', 'Current Assets', 'Total Assets', 'Non-Current Liabilities', 'Current Liabilities', 'Total Liabilities', 'Equity']
+              const nextStep = castCount < 7
+                ? `Continue extracting castings for group_current. You have ${castCount}/7 main SOFP sections. Sections needed: ${sections.join(', ')}.`
+                : "Good progress! Now extract SOCI castings if available, then call extract_cross_reference for note-to-statement links, or call extraction_complete if done."
+              functionResponses.push({
+                functionResponse: {
+                  name,
+                  response: { success: true, message: `Casting for ${(args as { section: string }).section} recorded. ${nextStep}` },
+                },
+              })
+            }
             break
 
           case "extract_cross_reference":
@@ -187,7 +214,7 @@ export async function extractWithToolCalling(
             functionResponses.push({
               functionResponse: {
                 name,
-                response: { success: true, message: `Cross-reference for ${(args as { noteRef: string }).noteRef} recorded. Continue extracting more cross-references.` },
+                response: { success: true, message: `Cross-reference for ${(args as { noteRef: string }).noteRef} recorded. Continue with more cross-references or call extract_movement for movement tables, or call extraction_complete if done.` },
               },
             })
             break
@@ -197,7 +224,7 @@ export async function extractWithToolCalling(
             functionResponses.push({
               functionResponse: {
                 name,
-                response: { success: true, message: `Movement for ${(args as { accountName: string }).accountName} recorded. Continue extracting more movements.` },
+                response: { success: true, message: `Movement for ${(args as { accountName: string }).accountName} recorded. Continue with more movements or call extraction_complete if done.` },
               },
             })
             break
@@ -207,7 +234,7 @@ export async function extractWithToolCalling(
             functionResponses.push({
               functionResponse: {
                 name,
-                response: { success: true, message: "Warning recorded. Continue extraction." },
+                response: { success: true, message: "Warning recorded. Continue extraction or call extraction_complete if done." },
               },
             })
             break

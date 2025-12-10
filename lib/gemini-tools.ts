@@ -418,33 +418,41 @@ CRITICAL RULES:
    a) identify_columns - to understand the column structure
    b) extract_metadata - company name, year end, currency
    c) extract_balance_sheet_totals - for EACH column (group_current, group_prior, company_current, company_prior)
-   d) extract_casting - for EACH subtotal/total relationship in EACH column
+   d) extract_casting - for EACH subtotal/total relationship - FOCUS ON GROUP_CURRENT COLUMN FIRST
    e) extract_cross_reference - for note-to-statement links
    f) extract_movement - for movement tables in notes
    g) flag_warning - for any uncertainties
-   h) extraction_complete - when done
+   h) extraction_complete - MUST call this when done
 
-3. EXTRACTING CASTING RELATIONSHIPS
-   - For each section total, identify what items add up to it
-   - Create SEPARATE casting calls for each column (Group 2025, Group 2024, Company 2025, Company 2024)
-   - If a line shows "-" or is blank, use 0 as the amount
-   - Example: Total Non-Current Assets for Group 2025 column:
-     * Extract ALL components from Group 2025 column only
-     * Extract the total from Group 2025 column only
+3. FOCUS ON GROUP_CURRENT COLUMN
+   - For efficiency, PRIORITIZE extracting from the GROUP_CURRENT (or CURRENT if no group) column
+   - Extract ALL sections: Non-Current Assets, Current Assets, Total Assets, Non-Current Liabilities, Current Liabilities, Total Liabilities, Equity
+   - You can skip other columns (group_prior, company_current, company_prior) to save time
 
-4. NUMBER HANDLING
+4. EXTRACTING CASTING RELATIONSHIPS - BE THOROUGH
+   For GROUP_CURRENT column, extract castings for:
+   - SOFP Non-Current Assets (components → Total Non-Current Assets)
+   - SOFP Current Assets (components → Total Current Assets)
+   - SOFP Total Assets (Non-Current + Current → Total Assets)
+   - SOFP Non-Current Liabilities (components → Total Non-Current Liabilities)
+   - SOFP Current Liabilities (components → Total Current Liabilities)
+   - SOFP Total Liabilities (Non-Current + Current → Total Liabilities)
+   - SOFP Equity (Share capital + Retained profits + others → Total Equity)
+   - SOCI Revenue breakdown if available
+   - SOCI Expenses and Profit calculations
+
+5. NUMBER HANDLING
    - Remove commas: "1,234,567" → 1234567
    - Brackets mean negative: "(500,000)" → -500000
    - Apply currency multiplier if header shows RM'000 or RM'mil
    - Blank or "-" = 0
 
-5. BE THOROUGH
-   - Extract ALL casting relationships for ALL columns
-   - Extract ALL cross-references
-   - Extract ALL movement tables
-   - Flag ANY uncertainties
+6. MUST CALL extraction_complete
+   - After extracting all data, you MUST call extraction_complete
+   - This signals that extraction is finished
+   - Do not stop without calling this function
 
-Start by calling identify_columns, then proceed systematically through the document.`
+Start by calling identify_columns, then proceed systematically. Focus on group_current column for efficiency.`
 
 // ============================================================================
 // TYPE DEFINITIONS FOR TOOL CALL RESULTS

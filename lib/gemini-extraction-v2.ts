@@ -114,7 +114,8 @@ NUMBER RULES:
 - Remove commas: "1,234,567" → 1234567
 - Brackets mean negative: "(500,000)" → -500000
 - If header shows "RM'000", multiply all numbers by 1000
-- Blank or "-" = 0
+- Blank, "-", or "—" = 0 (CRITICAL: a dash/hyphen means ZERO, not a small number like 1 or 2)
+- If you see a very small number (like 1, 2, 3) where other values in the column are in thousands/millions, verify it's not a misread dash
 
 EXTRACT THESE CASTING RELATIONSHIPS FOR EACH COLUMN:
 

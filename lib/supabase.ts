@@ -38,7 +38,7 @@ export interface JobAnalytics {
   total_cost_usd: number
   tools_configured: boolean
   tools_called: number
-  tool_usage_summary: Record<string, number>
+  tool_usage_summary: Record<string, string | number | boolean>
   iterations: number
   api_duration_ms: number
   total_duration_ms: number

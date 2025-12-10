@@ -1,187 +1,23 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai"
 import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supabase"
 import { generateDashboardHtml, type AuditDashboardData } from "@/lib/dashboard-template"
 import { ExtractionResult } from "@/lib/extraction-types"
 import { runVerification, toAuditDashboardData } from "@/lib/verification-engine"
-import EXTRACTION_PROMPT from "@/lib/extraction-prompt"
+import { extractWithToolCalling, withRetry } from "@/lib/gemini-extraction"
 
-// Configure maximum request body size (default is 1MB, increase to 50MB for large PDFs)
 // Note: Vercel's free tier has a 4.5MB limit, Pro has 5MB limit
-// This config only affects the runtime, not Vercel's infrastructure limits
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '50mb',
-    },
-  },
-}
+// For App Router, use route segment config instead of config object
 
 // For App Router, we also need to export runtime config
 export const maxDuration = 300 // 5 minutes for large PDF processing
 
 // ============================================================================
-// NEW ARCHITECTURE: Phase 1 (LLM Extract) → Phase 2 (Code Verify)
+// NEW ARCHITECTURE: Gemini Tool Calling for Column-Aware Extraction
 // ============================================================================
-// - LLM only extracts data from PDF (what it's good at)
+// - Uses Gemini function calling to extract data with explicit column context
+// - Prevents column mixing (Group vs Company, Current vs Prior)
 // - Code performs ALL arithmetic verification (100% accurate)
-// - No more inconsistent LLM arithmetic errors
 // ============================================================================
-
-// Parse JSON from Gemini's response (handles potential markdown wrapping and truncation)
-function parseExtractionJson(text: string, wasTruncated: boolean = false): ExtractionResult | null {
-  let jsonStr = text.trim()
-
-  // Remove markdown code blocks if present
-  if (jsonStr.startsWith("```json")) {
-    jsonStr = jsonStr.slice(7)
-  } else if (jsonStr.startsWith("```")) {
-    jsonStr = jsonStr.slice(3)
-  }
-  if (jsonStr.endsWith("```")) {
-    jsonStr = jsonStr.slice(0, -3)
-  }
-  jsonStr = jsonStr.trim()
-
-  // Try to find JSON object in the text
-  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/)
-  if (jsonMatch) {
-    jsonStr = jsonMatch[0]
-  }
-
-  // If truncated, try to repair the JSON
-  if (wasTruncated) {
-    jsonStr = repairTruncatedJson(jsonStr)
-  }
-
-  try {
-    const parsed = JSON.parse(jsonStr)
-
-    // Add extractedAt if not present
-    if (!parsed.extractedAt) {
-      parsed.extractedAt = new Date().toISOString()
-    }
-
-    // Ensure arrays exist
-    parsed.statements = parsed.statements || []
-    parsed.movements = parsed.movements || []
-    parsed.crossReferences = parsed.crossReferences || []
-    parsed.castingRelationships = parsed.castingRelationships || []
-    parsed.warnings = parsed.warnings || []
-
-    // If truncated, add a warning
-    if (wasTruncated) {
-      parsed.warnings.push({
-        type: 'MISSING_DATA',
-        location: 'Entire document',
-        description: 'Response was truncated due to length limits. Some data may be missing.',
-        confidence: 50,
-        pageNumber: 0
-      })
-    }
-
-    return parsed as ExtractionResult
-  } catch (e) {
-    console.error("Failed to parse extraction JSON:", e)
-    return null
-  }
-}
-
-// Attempt to repair truncated JSON by closing open brackets/braces
-function repairTruncatedJson(jsonStr: string): string {
-  let repaired = jsonStr.trim()
-
-  // First, find the last complete JSON structure by working backwards
-  // We need to find the last valid point where we can close the JSON
-
-  // Check if we're in an incomplete string (odd number of unescaped quotes)
-  let inString = false
-  let escape = false
-  let lastSafeIndex = 0
-
-  for (let i = 0; i < repaired.length; i++) {
-    const char = repaired[i]
-    if (escape) {
-      escape = false
-      continue
-    }
-    if (char === '\\') {
-      escape = true
-      continue
-    }
-    if (char === '"') {
-      inString = !inString
-      if (!inString) {
-        // Just closed a string, this is a safe point
-        lastSafeIndex = i + 1
-      }
-    }
-    // Track other safe points (after complete values)
-    if (!inString && (char === ',' || char === ']' || char === '}' || char === ':')) {
-      lastSafeIndex = i + 1
-    }
-  }
-
-  // If we ended mid-string, truncate to last safe point
-  if (inString && lastSafeIndex > 0) {
-    repaired = repaired.substring(0, lastSafeIndex)
-  }
-
-  // Remove trailing incomplete tokens more aggressively
-  // Handle cases like: `"key": ` or `"key": "partial` or `, "key` or `: 123` (incomplete number at end)
-  repaired = repaired
-    .replace(/,\s*"[^"]*"?\s*:\s*"[^"]*$/, '')  // incomplete key-value with string value
-    .replace(/,\s*"[^"]*"?\s*:\s*-?\d*\.?\d*$/, '')  // incomplete key-value with number value
-    .replace(/,\s*"[^"]*"?\s*:\s*$/, '')  // key with colon but no value
-    .replace(/,\s*"[^"]*$/, '')  // incomplete key
-    .replace(/,\s*$/, '')  // trailing comma
-    .replace(/:\s*"[^"]*$/, ': ""')  // incomplete string value - close it
-    .replace(/:\s*$/, ': null')  // missing value after colon
-
-  // Re-count open brackets and braces after cleanup
-  let openBraces = 0
-  let openBrackets = 0
-  inString = false
-  escape = false
-
-  for (const char of repaired) {
-    if (escape) {
-      escape = false
-      continue
-    }
-    if (char === '\\') {
-      escape = true
-      continue
-    }
-    if (char === '"') {
-      inString = !inString
-      continue
-    }
-    if (inString) continue
-
-    if (char === '{') openBraces++
-    else if (char === '}') openBraces--
-    else if (char === '[') openBrackets++
-    else if (char === ']') openBrackets--
-  }
-
-  // If still in a string after cleanup, close it
-  if (inString) {
-    repaired += '"'
-  }
-
-  // Close any open brackets first, then braces
-  while (openBrackets > 0) {
-    repaired += ']'
-    openBrackets--
-  }
-  while (openBraces > 0) {
-    repaired += '}'
-    openBraces--
-  }
-
-  return repaired
-}
 
 // Convert extraction + verification to legacy AuditDashboardData format
 function toLegacyFormat(extraction: ExtractionResult, verification: ReturnType<typeof runVerification>): AuditDashboardData {
@@ -260,141 +96,30 @@ export async function POST(request: NextRequest) {
     const pdfSizeKB = Math.round((cleanBase64.length * 3) / 4 / 1024)
     log("PDF processed", { base64Length: cleanBase64.length, estimatedSizeKB: pdfSizeKB })
 
-    const genAI = new GoogleGenerativeAI(apiKey)
-
-    // Safety settings to prevent content blocking
-    const safetySettings = [
-      {
-        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-      },
-    ]
-
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      generationConfig: {
-        maxOutputTokens: 65536, // Max output tokens for actual response
-        temperature: 0.1, // Low temperature for consistent extraction
-        // Disable thinking to maximize output tokens for extraction
-        // @ts-expect-error - thinkingConfig is a valid Gemini 2.5 option but not in types yet
-        thinkingConfig: {
-          thinkingBudget: 0, // Disable thinking to get more output tokens
-        },
-      },
-      safetySettings,
-    })
-
-    log("=== PHASE 1: LLM EXTRACTION (No arithmetic) ===")
-    log("Model", "gemini-2.5-flash")
-    log("Purpose", "Extract data only - verification done by code")
+    log("=== PHASE 1: GEMINI TOOL-CALLING EXTRACTION ===")
+    log("Model", "gemini-2.5-flash with function calling")
+    log("Purpose", "Column-aware extraction using structured tools")
 
     const apiStartTime = Date.now()
 
-    // Helper function to call API with retry on rate limit
-    const callWithRetry = async (retryCount = 0): Promise<{ text: string; inputTokens: number; outputTokens: number; wasTruncated: boolean }> => {
-      try {
-        const prompt = `${EXTRACTION_PROMPT}\n\nExtract all financial data from this document. Remember: EXTRACT ONLY, do not verify or calculate anything.\n\nIMPORTANT: Be CONCISE. Only include key totals and subtotals. Skip minor line items that don't affect totals.`
-
-        // Send PDF directly to Gemini Vision
-        const result = await model.generateContent([
-          {
-            inlineData: {
-              mimeType: "application/pdf",
-              data: cleanBase64,
-            },
-          },
-          { text: prompt },
-        ])
-        const response = result.response
-
-        // Log response details for debugging
-        const candidates = response.candidates
-        log("Response candidates count", candidates?.length || 0)
-
-        let wasTruncated = false
-        if (candidates && candidates.length > 0) {
-          const candidate = candidates[0]
-          log("Candidate finish reason", candidate.finishReason)
-
-          if (candidate.finishReason === "SAFETY") {
-            log("ERROR: Response blocked by safety filters")
-            throw new Error("Response blocked by safety filters. The content may have triggered safety restrictions.")
-          }
-
-          if (candidate.finishReason === "RECITATION") {
-            log("ERROR: Response blocked due to recitation")
-            throw new Error("Response blocked due to recitation policy.")
-          }
-
-          if (candidate.finishReason === "MAX_TOKENS") {
-            log("WARNING: Response truncated due to MAX_TOKENS - will attempt to repair JSON")
-            wasTruncated = true
-          }
-        }
-
-        // Get text
-        let text = ""
-        try {
-          text = response.text()
-        } catch (textError) {
-          log("ERROR: Failed to get response text", textError)
-          if (candidates && candidates[0]?.content?.parts) {
-            text = candidates[0].content.parts
-              .filter((part: { text?: string }) => part.text)
-              .map((part: { text?: string }) => part.text)
-              .join("")
-          }
-        }
-
-        log("Extraction response length", text.length)
-
-        const usageMetadata = response.usageMetadata
-        const inputTokens = usageMetadata?.promptTokenCount || 0
-        const outputTokens = usageMetadata?.candidatesTokenCount || 0
-
-        return { text, inputTokens, outputTokens, wasTruncated }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        if ((errorMessage.includes("429") || errorMessage.includes("rate") || errorMessage.includes("quota")) && retryCount < 3) {
-          const waitTime = Math.pow(2, retryCount) * 30000
-          log(`Rate limit hit, waiting ${waitTime / 1000}s before retry ${retryCount + 1}/3`)
-          await new Promise(resolve => setTimeout(resolve, waitTime))
-          return callWithRetry(retryCount + 1)
-        }
-        throw error
-      }
-    }
-
-    const { text: extractionText, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, wasTruncated } = await callWithRetry()
+    // Use Gemini tool calling for column-aware extraction
+    const { result: extraction, stats } = await withRetry(
+      () => extractWithToolCalling(apiKey, cleanBase64, log),
+      3,
+      log
+    )
 
     const extractionDuration = Date.now() - apiStartTime
-    log("Extraction completed", { durationMs: extractionDuration, wasTruncated })
+    const totalInputTokens = stats.inputTokens
+    const totalOutputTokens = stats.outputTokens
 
-    // Parse extraction result (with truncation repair if needed)
-    const extraction = parseExtractionJson(extractionText, wasTruncated)
+    log("Tool-calling extraction completed", {
+      durationMs: extractionDuration,
+      toolCalls: stats.toolCallsCount,
+      iterations: stats.iterations,
+    })
 
-    if (!extraction) {
-      log("ERROR: Failed to parse extraction result")
-      return NextResponse.json({
-        error: "Failed to parse extraction result from LLM",
-        rawResponse: extractionText.substring(0, 1000),
-        debug: { requestId, logs, durationMs: Date.now() - startTime }
-      }, { status: 500 })
-    }
-
-    log("Extraction parsed successfully", {
+    log("Extraction results", {
       companyName: extraction.companyName,
       statements: extraction.statements.length,
       movements: extraction.movements.length,
@@ -456,18 +181,19 @@ export async function POST(request: NextRequest) {
       input_cost_usd: costs.inputCost,
       output_cost_usd: costs.outputCost,
       total_cost_usd: costs.totalCost,
-      tools_configured: false,
-      tools_called: 0,
+      tools_configured: true,
+      tools_called: stats.toolCallsCount,
       tool_usage_summary: {
         extraction_confidence: extraction.overallConfidence,
         verification_method: 'deterministic_code',
+        extraction_method: 'gemini_tool_calling',
       },
-      iterations: 1,
+      iterations: stats.iterations,
       api_duration_ms: apiDuration,
       total_duration_ms: totalDuration,
       stop_reason: "completed",
-      analysis_length_chars: extractionText.length,
-      analysis_length_words: extractionText.split(/\s+/).length,
+      analysis_length_chars: 0,
+      analysis_length_words: 0,
       discrepancies_found: verification.kpi.exceptionsCount,
       status: "success",
     }
@@ -477,10 +203,12 @@ export async function POST(request: NextRequest) {
 
     log("=== REQUEST COMPLETED ===")
     log("Summary", {
-      architecture: "Extract (LLM) → Verify (Code)",
+      architecture: "Gemini Tool Calling → Code Verify",
+      extractionMethod: "column-aware function calling",
       extractionDurationMs: extractionDuration,
       verificationDurationMs: verificationDuration,
       totalDurationMs: totalDuration,
+      toolCallsCount: stats.toolCallsCount,
       checksPerformed: verification.kpi.totalChecks,
       accuracy: "100% (deterministic code verification)",
     })
@@ -507,7 +235,9 @@ export async function POST(request: NextRequest) {
         },
         debug: {
           requestId,
-          architecture: "extract_then_verify",
+          architecture: "gemini_tool_calling",
+          extractionMethod: "column-aware function calling",
+          toolCallsCount: stats.toolCallsCount,
           extractionDurationMs: extractionDuration,
           verificationDurationMs: verificationDuration,
           totalDurationMs: totalDuration,
@@ -540,7 +270,9 @@ export async function POST(request: NextRequest) {
       },
       debug: {
         requestId,
-        architecture: "extract_then_verify",
+        architecture: "gemini_tool_calling",
+        extractionMethod: "column-aware function calling",
+        toolCallsCount: stats.toolCallsCount,
         extractionDurationMs: extractionDuration,
         verificationDurationMs: verificationDuration,
         totalDurationMs: totalDuration,

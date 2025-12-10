@@ -1,9 +1,9 @@
 // ============================================================================
-// GEMINI EXTRACTION V2 - Single-Call JSON with Column Awareness
+// GEMINI EXTRACTION V2 - Single-Call JSON with ALL Columns
 // ============================================================================
 // This approach uses a single API call with structured JSON output.
-// The prompt explicitly instructs the model to identify columns first,
-// then extract all data for the primary column (Group or Company current year).
+// Extracts casting relationships for ALL columns (Group/Company × Current/Prior)
+// to enable comprehensive verification across all financial statement columns.
 // ============================================================================
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai"
@@ -30,19 +30,20 @@ interface ColumnAwareExtractionResult {
   columnStructure: {
     hasGroupColumns: boolean
     hasCompanyColumns: boolean
-    primaryColumn: string // e.g., "Group 2025" or "2025"
-    columnHeaders: string[]
+    columns: string[] // e.g., ["group_current", "group_prior", "company_current", "company_prior"]
   }
 
-  // Balance sheet totals for primary column
-  balanceSheetTotals: {
+  // Balance sheet totals for EACH column
+  balanceSheetTotals: Array<{
+    column: string // e.g., "group_current"
     totalAssets: number
     totalLiabilities: number
     totalEquity: number
-  }
+  }>
 
-  // All casting relationships for primary column
+  // All casting relationships for ALL columns
   castings: Array<{
+    column: string // e.g., "group_current", "company_prior"
     section: string
     totalLabel: string
     totalAmount: number
@@ -53,8 +54,9 @@ interface ColumnAwareExtractionResult {
     }>
   }>
 
-  // Cross-references for primary column
+  // Cross-references (note totals matched to statement line items)
   crossReferences: Array<{
+    column: string
     noteRef: string
     noteDescription: string
     noteTotal: number
@@ -91,30 +93,31 @@ interface ColumnAwareExtractionResult {
 
 const EXTRACTION_PROMPT = `You are a financial data extraction assistant for Malaysian financial statements.
 
-CRITICAL: COLUMN IDENTIFICATION FIRST
-Financial statements often have multiple columns:
+CRITICAL: EXTRACT DATA FOR ALL COLUMNS
+Financial statements typically have multiple columns that ALL need to be verified:
 - Group/Consolidated columns (for parent companies with subsidiaries)
 - Company columns (parent company standalone figures)
-- Current year and Prior year for each
+- Current year AND Prior year for each
 
-STEP 1: Identify which columns exist and extract data ONLY from the PRIMARY column:
-- If Group columns exist: use "Group [Current Year]" as primary
-- If only Company columns: use "Company [Current Year]" as primary
-- If single entity: use "[Current Year]" as primary
+Use these column identifiers:
+- "group_current" = Group/Consolidated Current Year
+- "group_prior" = Group/Consolidated Prior Year
+- "company_current" = Company Current Year
+- "company_prior" = Company Prior Year
+- If no Group/Company distinction: use "current" and "prior"
 
-STEP 2: Extract ALL data from the PRIMARY COLUMN ONLY
-- Do NOT mix values from different columns
-- A "-" or blank in the primary column means 0, not a value from another column
+IMPORTANT: Extract SEPARATE casting entries for EACH column. Do NOT mix values between columns.
+A "-" or blank = 0 for that specific column.
 
-IMPORTANT NUMBER RULES:
+NUMBER RULES:
 - Remove commas: "1,234,567" → 1234567
 - Brackets mean negative: "(500,000)" → -500000
 - If header shows "RM'000", multiply all numbers by 1000
 - Blank or "-" = 0
 
-EXTRACT THESE CASTING RELATIONSHIPS (for primary column):
+EXTRACT THESE CASTING RELATIONSHIPS FOR EACH COLUMN:
 
-SOFP (Statement of Financial Position):
+SOFP (Statement of Financial Position) - 7 castings per column:
 1. Non-Current Assets: [components] → Total Non-Current Assets
 2. Current Assets: [components] → Total Current Assets
 3. Total Assets: Total Non-Current Assets + Total Current Assets → Total Assets
@@ -123,11 +126,11 @@ SOFP (Statement of Financial Position):
 6. Total Liabilities: Total Non-Current Liabilities + Total Current Liabilities → Total Liabilities
 7. Equity: [components] → Total Equity
 
-SOCI (Statement of Comprehensive Income):
-8. Revenue breakdown if detailed
-9. Cost of sales components
-10. Operating expenses breakdown
-11. Profit calculations
+SOCI (Statement of Comprehensive Income) - per column:
+8. Gross profit: Revenue - Cost of sales
+9. Operating profit calculations
+10. Profit before tax breakdown
+11. Profit for the year
 
 Return ONLY this JSON structure (no markdown):
 {
@@ -136,37 +139,62 @@ Return ONLY this JSON structure (no markdown):
   "reportingCurrency": "RM",
 
   "columnStructure": {
-    "hasGroupColumns": true/false,
-    "hasCompanyColumns": true/false,
-    "primaryColumn": "Group 2025" or "Company 2025" or "2025",
-    "columnHeaders": ["Group 2025", "Group 2024", "Company 2025", "Company 2024"]
+    "hasGroupColumns": true,
+    "hasCompanyColumns": true,
+    "columns": ["group_current", "group_prior", "company_current", "company_prior"]
   },
 
-  "balanceSheetTotals": {
-    "totalAssets": number,
-    "totalLiabilities": number,
-    "totalEquity": number
-  },
+  "balanceSheetTotals": [
+    {"column": "group_current", "totalAssets": 123456, "totalLiabilities": 78901, "totalEquity": 44555},
+    {"column": "group_prior", "totalAssets": 100000, "totalLiabilities": 60000, "totalEquity": 40000},
+    {"column": "company_current", "totalAssets": 90000, "totalLiabilities": 50000, "totalEquity": 40000},
+    {"column": "company_prior", "totalAssets": 80000, "totalLiabilities": 45000, "totalEquity": 35000}
+  ],
 
   "castings": [
     {
+      "column": "group_current",
       "section": "SOFP - Non-Current Assets",
       "totalLabel": "TOTAL NON-CURRENT ASSETS",
-      "totalAmount": number,
+      "totalAmount": 83864,
       "components": [
-        {"label": "Plant and equipment", "amount": number, "noteRef": "5"},
-        {"label": "Investment in subsidiaries", "amount": 0, "noteRef": "6"}
+        {"label": "Plant and equipment", "amount": 41550, "noteRef": "5"},
+        {"label": "Investment in subsidiaries", "amount": 0, "noteRef": "6"},
+        {"label": "Goodwill on consolidation", "amount": 42314, "noteRef": "7"}
+      ]
+    },
+    {
+      "column": "group_prior",
+      "section": "SOFP - Non-Current Assets",
+      "totalLabel": "TOTAL NON-CURRENT ASSETS",
+      "totalAmount": 75000,
+      "components": [
+        {"label": "Plant and equipment", "amount": 35000, "noteRef": "5"},
+        {"label": "Investment in subsidiaries", "amount": 0, "noteRef": "6"},
+        {"label": "Goodwill on consolidation", "amount": 40000, "noteRef": "7"}
+      ]
+    },
+    {
+      "column": "company_current",
+      "section": "SOFP - Non-Current Assets",
+      "totalLabel": "TOTAL NON-CURRENT ASSETS",
+      "totalAmount": 680650,
+      "components": [
+        {"label": "Plant and equipment", "amount": 41550, "noteRef": "5"},
+        {"label": "Investment in subsidiaries", "amount": 639100, "noteRef": "6"},
+        {"label": "Goodwill on consolidation", "amount": 0, "noteRef": "7"}
       ]
     }
   ],
 
   "crossReferences": [
     {
+      "column": "group_current",
       "noteRef": "Note 5",
       "noteDescription": "Plant and Equipment",
-      "noteTotal": number,
+      "noteTotal": 41550,
       "statementLineItem": "Plant and equipment",
-      "statementAmount": number,
+      "statementAmount": 41550,
       "statementType": "SOFP",
       "isExpenseOrDeduction": false
     }
@@ -176,10 +204,10 @@ Return ONLY this JSON structure (no markdown):
     {
       "accountName": "Property, Plant and Equipment",
       "noteRef": "Note 5",
-      "opening": number,
-      "additions": [{"description": "Additions", "amount": number}],
-      "deductions": [{"description": "Depreciation", "amount": number}],
-      "statedClosing": number
+      "opening": 35000,
+      "additions": [{"description": "Additions", "amount": 10000}],
+      "deductions": [{"description": "Depreciation", "amount": 3450}],
+      "statedClosing": 41550
     }
   ],
 
@@ -195,8 +223,11 @@ Return ONLY this JSON structure (no markdown):
   "overallConfidence": 85
 }
 
-BE THOROUGH - Extract ALL casting relationships from SOFP and SOCI.
-Remember: Only use values from the PRIMARY column. If a cell shows "-", use 0.`
+BE THOROUGH:
+- Extract ALL 7 SOFP castings for EACH column (up to 28 total if 4 columns)
+- Extract SOCI castings for each column
+- Keep column values SEPARATE - never mix Group and Company values
+- If a column shows "-" for a line item, use 0 for that column`
 
 // ============================================================================
 // MAIN EXTRACTION FUNCTION
@@ -272,7 +303,7 @@ export async function extractWithSingleCall(
 
   log("Extraction parsed", {
     companyName: extraction.companyName,
-    primaryColumn: extraction.columnStructure.primaryColumn,
+    columns: extraction.columnStructure.columns,
     castingsCount: extraction.castings.length,
     crossRefsCount: extraction.crossReferences.length,
     movementsCount: extraction.movements.length,
@@ -327,14 +358,9 @@ function parseExtractionJson(text: string): ColumnAwareExtractionResult | null {
     parsed.columnStructure = parsed.columnStructure || {
       hasGroupColumns: false,
       hasCompanyColumns: true,
-      primaryColumn: "current",
-      columnHeaders: []
+      columns: ["current"]
     }
-    parsed.balanceSheetTotals = parsed.balanceSheetTotals || {
-      totalAssets: 0,
-      totalLiabilities: 0,
-      totalEquity: 0
-    }
+    parsed.balanceSheetTotals = parsed.balanceSheetTotals || []
 
     return parsed as ColumnAwareExtractionResult
   } catch (e) {
@@ -348,21 +374,19 @@ function parseExtractionJson(text: string): ColumnAwareExtractionResult | null {
 // ============================================================================
 
 function convertToStandardFormat(extraction: ColumnAwareExtractionResult): ExtractionResult {
-  const columnSource = extraction.columnStructure.primaryColumn
-
-  // Convert castings
+  // Convert ALL castings from ALL columns - include column in section name
   const castingRelationships: ExtractedCastingRelationship[] = extraction.castings.map(c => ({
     totalLabel: c.totalLabel,
     totalAmount: c.totalAmount,
     componentLabels: c.components.map(comp => comp.label),
     componentAmounts: c.components.map(comp => comp.amount),
-    section: `${c.section} (${columnSource})`,
+    section: `${c.section} (${c.column})`,
   }))
 
-  // Convert cross-references
+  // Convert ALL cross-references from ALL columns
   const crossReferences: ExtractedCrossReference[] = extraction.crossReferences.map(cr => ({
     noteRef: cr.noteRef,
-    noteDescription: cr.noteDescription,
+    noteDescription: `${cr.noteDescription} (${cr.column})`,
     noteTotal: cr.noteTotal,
     statementLineItem: cr.statementLineItem,
     statementAmount: cr.statementAmount,
@@ -388,8 +412,14 @@ function convertToStandardFormat(extraction: ColumnAwareExtractionResult): Extra
     confidence: w.confidence,
   }))
 
-  // Build statements array
-  const statements = [{
+  // Get balance sheet totals - prefer group_current, then company_current, then first available
+  const bsTotals = extraction.balanceSheetTotals.find(bs => bs.column === 'group_current')
+    || extraction.balanceSheetTotals.find(bs => bs.column === 'company_current')
+    || extraction.balanceSheetTotals.find(bs => bs.column === 'current')
+    || extraction.balanceSheetTotals[0]
+
+  // Build statements array with balance sheet totals
+  const statements = bsTotals ? [{
     statementType: "SOFP" as const,
     title: "Statement of Financial Position",
     pageNumbers: [],
@@ -398,10 +428,10 @@ function convertToStandardFormat(extraction: ColumnAwareExtractionResult): Extra
     },
     currency: extraction.reportingCurrency,
     sections: [],
-    totalAssets: { current: extraction.balanceSheetTotals.totalAssets },
-    totalLiabilities: { current: extraction.balanceSheetTotals.totalLiabilities },
-    totalEquity: { current: extraction.balanceSheetTotals.totalEquity },
-  }]
+    totalAssets: { current: bsTotals.totalAssets },
+    totalLiabilities: { current: bsTotals.totalLiabilities },
+    totalEquity: { current: bsTotals.totalEquity },
+  }] : []
 
   return {
     companyName: extraction.companyName,

@@ -28,7 +28,11 @@ export default function FinancialStatementChecker() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [htmlResult, setHtmlResult] = useState<string>("")
   const [error, setError] = useState<string>("")
+  const [warning, setWarning] = useState<string>("")
   const [mounted, setMounted] = useState(false)
+
+  // Vercel's free tier has a 4.5MB body limit
+  const MAX_FILE_SIZE_MB = 4.5
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const { theme, setTheme } = useTheme()
 
@@ -41,10 +45,18 @@ export default function FinancialStatementChecker() {
     if (selectedFile && selectedFile.type === "application/pdf") {
       setFile(selectedFile)
       setError("")
+      setWarning("")
       setHtmlResult("")
+
+      // Check file size and warn if it exceeds Vercel's limit
+      const fileSizeMB = selectedFile.size / 1024 / 1024
+      if (fileSizeMB > MAX_FILE_SIZE_MB) {
+        setWarning(`File size (${fileSizeMB.toFixed(1)}MB) exceeds Vercel's free tier limit of ${MAX_FILE_SIZE_MB}MB. The analysis may fail. Consider using a smaller PDF or compressing this one.`)
+      }
     } else {
       setError("Please select a valid PDF file")
       setFile(null)
+      setWarning("")
     }
   }
 
@@ -74,8 +86,19 @@ export default function FinancialStatementChecker() {
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || "Failed to analyze financial statement")
+        // Handle non-JSON error responses (e.g., "Request Entity Too Large" from Vercel)
+        const contentType = response.headers.get("content-type")
+        if (contentType && contentType.includes("application/json")) {
+          const errorData = await response.json()
+          throw new Error(errorData.error || "Failed to analyze financial statement")
+        } else {
+          const errorText = await response.text()
+          // Check for common Vercel/server errors
+          if (errorText.includes("Request Entity Too Large") || response.status === 413) {
+            throw new Error("File too large. Vercel's free tier has a 4.5MB limit. Please use a smaller PDF or consider upgrading to Vercel Pro for larger files (up to 5MB).")
+          }
+          throw new Error(errorText || `Server error: ${response.status}`)
+        }
       }
 
       const data = await response.json()
@@ -316,6 +339,14 @@ export default function FinancialStatementChecker() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Warning Alert */}
+        {warning && (
+          <Alert className="mb-4 border-yellow-500/50 bg-yellow-500/10">
+            <AlertCircle className="h-4 w-4 text-yellow-500" />
+            <AlertDescription className="text-yellow-600 dark:text-yellow-400">{warning}</AlertDescription>
+          </Alert>
+        )}
 
         {/* Error Alert */}
         {error && (

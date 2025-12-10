@@ -6,6 +6,20 @@ import { ExtractionResult } from "@/lib/extraction-types"
 import { runVerification, toAuditDashboardData } from "@/lib/verification-engine"
 import EXTRACTION_PROMPT from "@/lib/extraction-prompt"
 
+// Configure maximum request body size (default is 1MB, increase to 50MB for large PDFs)
+// Note: Vercel's free tier has a 4.5MB limit, Pro has 5MB limit
+// This config only affects the runtime, not Vercel's infrastructure limits
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '50mb',
+    },
+  },
+}
+
+// For App Router, we also need to export runtime config
+export const maxDuration = 300 // 5 minutes for large PDF processing
+
 // ============================================================================
 // NEW ARCHITECTURE: Phase 1 (LLM Extract) → Phase 2 (Code Verify)
 // ============================================================================

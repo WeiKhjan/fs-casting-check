@@ -3,7 +3,7 @@ import { saveJobAnalytics, calculateCost, type JobAnalytics } from "@/lib/supaba
 import { generateDashboardHtml, type AuditDashboardData } from "@/lib/dashboard-template"
 import { ExtractionResult } from "@/lib/extraction-types"
 import { runVerification, toAuditDashboardData } from "@/lib/verification-engine"
-import { extractWithToolCalling, withRetry } from "@/lib/gemini-extraction"
+import { extractWithSingleCall, withRetry } from "@/lib/gemini-extraction-v2"
 
 // Note: Vercel's free tier has a 4.5MB limit, Pro has 5MB limit
 // For App Router, use route segment config instead of config object
@@ -96,15 +96,15 @@ export async function POST(request: NextRequest) {
     const pdfSizeKB = Math.round((cleanBase64.length * 3) / 4 / 1024)
     log("PDF processed", { base64Length: cleanBase64.length, estimatedSizeKB: pdfSizeKB })
 
-    log("=== PHASE 1: GEMINI TOOL-CALLING EXTRACTION ===")
-    log("Model", "gemini-2.5-flash with function calling")
-    log("Purpose", "Column-aware extraction using structured tools")
+    log("=== PHASE 1: SINGLE-CALL COLUMN-AWARE EXTRACTION ===")
+    log("Model", "gemini-2.5-flash")
+    log("Purpose", "Single API call with column-aware JSON extraction (handles many tables efficiently)")
 
     const apiStartTime = Date.now()
 
-    // Use Gemini tool calling for column-aware extraction
+    // Use single API call for efficient extraction
     const { result: extraction, stats } = await withRetry(
-      () => extractWithToolCalling(apiKey, cleanBase64, log),
+      () => extractWithSingleCall(apiKey, cleanBase64, log),
       3,
       log
     )
@@ -113,9 +113,8 @@ export async function POST(request: NextRequest) {
     const totalInputTokens = stats.inputTokens
     const totalOutputTokens = stats.outputTokens
 
-    log("Tool-calling extraction completed", {
+    log("Single-call extraction completed", {
       durationMs: extractionDuration,
-      toolCalls: stats.toolCallsCount,
       iterations: stats.iterations,
     })
 
@@ -181,14 +180,17 @@ export async function POST(request: NextRequest) {
       input_cost_usd: costs.inputCost,
       output_cost_usd: costs.outputCost,
       total_cost_usd: costs.totalCost,
-      tools_configured: true,
-      tools_called: stats.toolCallsCount,
+      tools_configured: false,
+      tools_called: 0,
       tool_usage_summary: {
         extraction_confidence: extraction.overallConfidence,
         verification_method: 'deterministic_code',
-        extraction_method: 'gemini_tool_calling',
+        extraction_method: 'single_call_json',
+        castings_extracted: extraction.castingRelationships.length,
+        cross_refs_extracted: extraction.crossReferences.length,
+        movements_extracted: extraction.movements.length,
       },
-      iterations: stats.iterations,
+      iterations: 1,
       api_duration_ms: apiDuration,
       total_duration_ms: totalDuration,
       stop_reason: "completed",
@@ -203,12 +205,11 @@ export async function POST(request: NextRequest) {
 
     log("=== REQUEST COMPLETED ===")
     log("Summary", {
-      architecture: "Gemini Tool Calling → Code Verify",
-      extractionMethod: "column-aware function calling",
+      architecture: "Single-Call Extraction → Code Verify",
+      extractionMethod: "column-aware single JSON call",
       extractionDurationMs: extractionDuration,
       verificationDurationMs: verificationDuration,
       totalDurationMs: totalDuration,
-      toolCallsCount: stats.toolCallsCount,
       checksPerformed: verification.kpi.totalChecks,
       accuracy: "100% (deterministic code verification)",
     })
@@ -235,9 +236,8 @@ export async function POST(request: NextRequest) {
         },
         debug: {
           requestId,
-          architecture: "gemini_tool_calling",
-          extractionMethod: "column-aware function calling",
-          toolCallsCount: stats.toolCallsCount,
+          architecture: "single_call_extraction",
+          extractionMethod: "column-aware JSON",
           extractionDurationMs: extractionDuration,
           verificationDurationMs: verificationDuration,
           totalDurationMs: totalDuration,
@@ -270,9 +270,8 @@ export async function POST(request: NextRequest) {
       },
       debug: {
         requestId,
-        architecture: "gemini_tool_calling",
-        extractionMethod: "column-aware function calling",
-        toolCallsCount: stats.toolCallsCount,
+        architecture: "single_call_extraction",
+        extractionMethod: "column-aware JSON",
         extractionDurationMs: extractionDuration,
         verificationDurationMs: verificationDuration,
         totalDurationMs: totalDuration,

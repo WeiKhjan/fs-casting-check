@@ -191,10 +191,30 @@ Return ONLY this JSON structure (no markdown):
     {
       "column": "group_current",
       "noteRef": "Note 5",
-      "noteDescription": "Plant and Equipment",
+      "noteDescription": "Plant and Equipment - Net Book Value",
       "noteTotal": 41550,
       "statementLineItem": "Plant and equipment",
       "statementAmount": 41550,
+      "statementType": "SOFP",
+      "isExpenseOrDeduction": false
+    },
+    {
+      "column": "company_current",
+      "noteRef": "Note 13",
+      "noteDescription": "Borrowings - Non-current portion",
+      "noteTotal": 322755,
+      "statementLineItem": "Borrowings (non-current)",
+      "statementAmount": 322755,
+      "statementType": "SOFP",
+      "isExpenseOrDeduction": false
+    },
+    {
+      "column": "company_current",
+      "noteRef": "Note 13",
+      "noteDescription": "Borrowings - Current portion",
+      "noteTotal": 32057,
+      "statementLineItem": "Borrowings (current)",
+      "statementAmount": 32057,
       "statementType": "SOFP",
       "isExpenseOrDeduction": false
     }
@@ -227,7 +247,15 @@ BE THOROUGH:
 - Extract ALL 7 SOFP castings for EACH column (up to 28 total if 4 columns)
 - Extract SOCI castings for each column
 - Keep column values SEPARATE - never mix Group and Company values
-- If a column shows "-" for a line item, use 0 for that column`
+- If a column shows "-" for a line item, use 0 for that column
+
+CROSS-REFERENCE RULES:
+- Match note SUB-TOTALS to statement line items, not grand totals
+- For Borrowings notes: match "Current" sub-total to current borrowings, "Non-current" sub-total to non-current borrowings
+- For PPE notes: match the "Net Book Value" or closing balance to the statement amount
+- For notes with Current/Non-current splits: create SEPARATE cross-references for each
+- noteTotal = the amount shown in the NOTE that should match the statement
+- statementAmount = the amount shown on SOFP/SOCI for that line item`
 
 // ============================================================================
 // MAIN EXTRACTION FUNCTION

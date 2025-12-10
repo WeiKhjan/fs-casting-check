@@ -87,8 +87,9 @@ export interface AuditDashboardData {
   warnings?: ExtractionWarning[]
 }
 
-function escapeHtml(text: string): string {
-  return text
+function escapeHtml(text: string | null | undefined): string {
+  if (text == null) return ""
+  return String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -96,12 +97,13 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#039;")
 }
 
-function formatComponents(components: { name: string; value: string }[]): string {
+function formatComponents(components: { name: string; value: string }[] | null | undefined): string {
+  if (!components || components.length === 0) return "-"
   return components.map(c => `${escapeHtml(c.name)}: ${escapeHtml(c.value)}`).join("<br>")
 }
 
-function formatAdditionsDeductions(items: { description: string; value: string }[]): string {
-  if (items.length === 0) return "-"
+function formatAdditionsDeductions(items: { description: string; value: string }[] | null | undefined): string {
+  if (!items || items.length === 0) return "-"
   return items.map(i => `${escapeHtml(i.description)}: ${escapeHtml(i.value)}`).join("<br>")
 }
 
